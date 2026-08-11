@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::{presentation::*, tools::CorosServer};
+    use rmcp::{handler::server::tool::IntoCallToolResult, model::CallToolResponse};
     use serde_json::json;
 
     #[test]
@@ -65,6 +66,26 @@ mod tests {
                 .iter()
                 .any(|sport| sport["sportType"] == 402)
         );
+    }
+    #[test]
+    fn coros_numeric_fields_accept_number_or_string() {
+        assert_eq!(value_i64(&json!(5)), Some(5));
+        assert_eq!(value_i64(&json!("5")), Some(5));
+        assert_eq!(value_i64(&json!("not a number")), None);
+    }
+
+    #[tokio::test]
+    async fn tool_errors_are_flagged_as_mcp_errors() {
+        let wire = result(async { Err(anyhow::anyhow!("expected failure")) })
+            .await
+            .into_call_tool_result()
+            .expect("tool error should have a valid MCP response");
+        match wire {
+            CallToolResponse::Complete(response) => {
+                assert_eq!(response.is_error, Some(true));
+            }
+            _ => panic!("expected a completed tool response"),
+        }
     }
 
     #[test]

@@ -32,7 +32,10 @@ impl CorosServer {
     #[tool(
         description = "Log in to COROS Training Hub. Uses supplied credentials or COROS_EMAIL/COROS_PASSWORD environment variables."
     )]
-    async fn authenticate_coros(&self, Parameters(p): Parameters<Authenticate>) -> String {
+    async fn authenticate_coros(
+        &self,
+        Parameters(p): Parameters<Authenticate>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let e = p
                 .email
@@ -61,7 +64,7 @@ impl CorosServer {
     #[tool(
         description = "Check whether COROS authentication is available from stored credentials or environment variables."
     )]
-    async fn check_coros_auth(&self) -> String {
+    async fn check_coros_auth(&self) -> std::result::Result<String, String> {
         result(async {
             let a = self.auth().await?;
             Ok(format!(
@@ -74,19 +77,28 @@ impl CorosServer {
     #[tool(
         description = "Search the bundled COROS strength exercise catalog by name, muscle, body part, or equipment."
     )]
-    async fn search_exercises(&self, Parameters(p): Parameters<Search>) -> String {
+    async fn search_exercises(
+        &self,
+        Parameters(p): Parameters<Search>,
+    ) -> std::result::Result<String, String> {
         result(async { let mut rows=Self::catalog()?; let matches=|v:&Value, q:&Option<String>, key:&str|q.as_ref().is_none_or(|q|field(v,key).to_lowercase().contains(&q.to_lowercase())); rows.retain(|v|matches(v,&p.query,"name")&&matches(v,&p.muscle,"muscleText")&&matches(v,&p.body_part,"partText")&&matches(v,&p.equipment,"equipmentText")); let count=rows.len(); let rows:Vec<_>=rows.into_iter().take(p.limit.unwrap_or(20).min(50)).map(|e|json!({"name":e["name"],"muscles":e["muscleText"],"secondaryMuscles":e["secondaryMuscleText"],"bodyParts":e["partText"],"equipment":e["equipmentText"],"sets":e["sets"],"targetValue":e["targetValue"],"restSeconds":e["restValue"]})).collect(); Ok(if rows.is_empty(){"No exercises found matching your search criteria.".into()}else{format!("Found {count} exercises:\n{}",text(json!(rows)))}) }).await
     }
     #[tool(
         description = "Create a strength workout on COROS Training Hub from catalog exercise names."
     )]
-    async fn create_workout(&self, Parameters(p): Parameters<CreateWorkout>) -> String {
+    async fn create_workout(
+        &self,
+        Parameters(p): Parameters<CreateWorkout>,
+    ) -> std::result::Result<String, String> {
         result(async { if p.exercises.is_empty(){return Err(anyhow!("At least one exercise is required."));} let auth=self.auth().await?; let catalog=Self::catalog()?; let mut payloads=Vec::new(); for (i,e) in p.exercises.iter().enumerate(){let source=catalog.iter().find(|v|field(v,"name")==e.name).ok_or_else(||anyhow!("Exercise not found in catalog: \"{}\"",e.name))?;let mut v=source.clone();let o=v.as_object_mut().unwrap(); o.insert("access".into(),json!(0));o.insert("defaultOrder".into(),json!(0));o.insert("id".into(),json!(i+1));o.insert("sortNo".into(),json!(i+1));o.insert("isDefaultAdd".into(),json!(0));o.insert("isGroup".into(),json!(false));o.insert("isIntensityPercent".into(),json!(false));o.insert("nameText".into(),source["name"].clone());o.insert("descText".into(),source["desc"].clone());o.insert("originId".into(),source["id"].clone());o.insert("groupId".into(),json!(""));o.insert("targetDisplayUnit".into(),json!(0));o.insert("hrType".into(),json!(0));o.insert("intensityValueExtend".into(),json!(0));o.insert("intensityMultiplier".into(),json!(0));o.insert("intensityPercent".into(),json!(0));o.insert("intensityPercentExtend".into(),json!(0));o.insert("intensityDisplayUnit".into(),json!("6")); if let Some(x)=e.sets{o.insert("sets".into(),json!(x));}if let Some(x)=e.reps{o.insert("targetType".into(),json!(3));o.insert("targetValue".into(),json!(x));}else if let Some(x)=e.duration{o.insert("targetType".into(),json!(2));o.insert("targetValue".into(),json!(x));}if let Some(x)=e.rest_seconds{o.insert("restValue".into(),json!(x));}if let Some(x)=e.weight_kg{o.insert("intensityType".into(),json!(1));o.insert("intensityValue".into(),json!(x*1000.0));}payloads.push(v);} let overview=p.overview.unwrap_or_default(); let base=json!({"access":1,"authorId":"0","createTimestamp":0,"distance":0,"duration":0,"essence":0,"estimatedType":0,"estimatedValue":0,"exerciseNum":0,"exercises":payloads,"headPic":"","id":"0","idInPlan":"0","name":p.name,"nickname":"","originEssence":0,"overview":overview,"pbVersion":2,"planIdIndex":0,"poolLength":2500,"profile":"","referExercise":{"intensityType":1,"hrType":0,"valueType":1},"sex":0,"shareUrl":"","simple":false,"sourceUrl":DEFAULT_SOURCE_URL,"sportType":4,"star":0,"subType":65535,"targetType":0,"targetValue":0,"thirdPartyId":0,"totalSets":0,"trainingLoad":0,"type":0,"unit":0,"userId":"0","version":0,"videoCoverUrl":"","videoUrl":"","fastIntensityTypeName":"weight","poolLengthId":1,"poolLengthUnit":2,"sourceId":"425868133463670784"}); let calc=self.post(&auth,"/training/program/calculate",base.clone()).await?; let mut add=base;let o=add.as_object_mut().unwrap();o.insert("duration".into(),calc["data"]["duration"].clone());o.insert("totalSets".into(),calc["data"]["totalSets"].clone());o.insert("trainingLoad".into(),calc["data"]["trainingLoad"].clone());o.insert("distance".into(),json!("0"));o.insert("sets".into(),calc["data"]["totalSets"].clone());o.insert("pitch".into(),json!(0));self.post(&auth,"/training/program/add",add).await?;Ok(format!("Workout \"{}\" created successfully.",p.name)) }).await
     }
     #[tool(
         description = "Fetch the latest COROS exercise catalog and rebuild the local catalog file. Requires authentication."
     )]
-    async fn update_exercises(&self, Parameters(p): Parameters<UpdateExercises>) -> String {
+    async fn update_exercises(
+        &self,
+        Parameters(p): Parameters<UpdateExercises>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let raw = self
@@ -211,7 +223,10 @@ impl CorosServer {
         .await
     }
     #[tool(description = "List workouts from COROS Training Hub.")]
-    async fn list_workouts(&self, Parameters(p): Parameters<ListWorkouts>) -> String {
+    async fn list_workouts(
+        &self,
+        Parameters(p): Parameters<ListWorkouts>,
+    ) -> std::result::Result<String, String> {
         result(async { let rows=self.workouts(&self.auth().await?,p.name.as_deref().unwrap_or(""),p.sport_type.unwrap_or(0),p.limit.unwrap_or(10).clamp(1,50)).await?;Ok(if rows.is_empty(){"No workouts found.".into()}else{text(json!(rows.iter().map(|w|json!({"id":w["id"],"name":w["name"],"overview":w["overview"],"sportType":w["sportType"],"duration":w["duration"],"totalSets":w["totalSets"],"exerciseNum":w["exerciseNum"]})).collect::<Vec<_>>()))}) }).await
     }
     #[tool(
@@ -220,7 +235,7 @@ impl CorosServer {
     async fn create_run_workout(
         &self,
         Parameters(p): Parameters<CreateEnduranceWorkout>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             let payload = endurance_workout_payload(&p, 1)?;
             self.create_program(&self.auth().await?, payload).await?;
@@ -237,7 +252,7 @@ impl CorosServer {
     async fn create_bike_workout(
         &self,
         Parameters(p): Parameters<CreateEnduranceWorkout>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             let payload = endurance_workout_payload(&p, 2)?;
             self.create_program(&self.auth().await?, payload).await?;
@@ -251,7 +266,10 @@ impl CorosServer {
     #[tool(
         description = "Clone an existing workout and patch selected zero-based steps. dryRun defaults to true; the original workout is never changed."
     )]
-    async fn update_workout(&self, Parameters(p): Parameters<UpdateWorkout>) -> String {
+    async fn update_workout(
+        &self,
+        Parameters(p): Parameters<UpdateWorkout>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let original = self.workout_detail(&auth, &p.workout_id).await?;
@@ -271,7 +289,10 @@ impl CorosServer {
     #[tool(
         description = "Patch a COROS workout in place. dryRun defaults to true; a live update requires confirm true and replaces the original workout definition."
     )]
-    async fn update_workout_in_place(&self, Parameters(p): Parameters<UpdateWorkout>) -> String {
+    async fn update_workout_in_place(
+        &self,
+        Parameters(p): Parameters<UpdateWorkout>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let original = self.workout_detail(&auth, &p.workout_id).await?;
@@ -313,7 +334,10 @@ impl CorosServer {
     #[tool(
         description = "List completed activities recorded by a COROS watch. startDate/endDate are YYYYMMDD integers; sportTypes optionally filters by COROS sport type IDs."
     )]
-    async fn list_activities(&self, Parameters(p): Parameters<ListActivities>) -> String {
+    async fn list_activities(
+        &self,
+        Parameters(p): Parameters<ListActivities>,
+    ) -> std::result::Result<String, String> {
         result(async {
             if let (Some(start), Some(end)) = (p.start_date, p.end_date) && start > end {
                 return Err(anyhow!("startDate must be on or before endDate."));
@@ -359,7 +383,10 @@ impl CorosServer {
     #[tool(
         description = "Get completed activity details. Strength activities include lifted sets; other sports return summary, laps, and available HR/power zones. Use labelId and sportType from list_activities; sportType defaults to 402 (Strength)."
     )]
-    async fn get_activity_detail(&self, Parameters(p): Parameters<ActivityDetail>) -> String {
+    async fn get_activity_detail(
+        &self,
+        Parameters(p): Parameters<ActivityDetail>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let sport_type = p.sport_type.unwrap_or(402);
             let detail = self
@@ -398,19 +425,22 @@ impl CorosServer {
     #[tool(
         description = "List COROS sport type IDs and names. Uses a built-in COROS mapping if the optional service endpoint is unavailable."
     )]
-    async fn get_sport_types(&self) -> String {
+    async fn get_sport_types(&self) -> std::result::Result<String, String> {
         result(async { Ok(text(self.sport_types(&self.auth().await?).await?)) }).await
     }
     #[tool(
         description = "Get the COROS private profile, including available training-zone settings."
     )]
-    async fn get_profile(&self) -> String {
+    async fn get_profile(&self) -> std::result::Result<String, String> {
         result(async { Ok(text(self.private_profile(&self.auth().await?).await?)) }).await
     }
     #[tool(
         description = "Get daily COROS training metrics for an inclusive YYYYMMDD date range, including HRV, resting HR, training load, and recent EvoLab analysis."
     )]
-    async fn get_daily_metrics(&self, Parameters(p): Parameters<DailyMetrics>) -> String {
+    async fn get_daily_metrics(
+        &self,
+        Parameters(p): Parameters<DailyMetrics>,
+    ) -> std::result::Result<String, String> {
         result(async {
             if p.start_date > p.end_date {
                 return Err(anyhow!("startDate must be on or before endDate."));
@@ -425,7 +455,10 @@ impl CorosServer {
     #[tool(
         description = "Get a temporary COROS download URL for a completed activity. fileType must be csv, gpx, kml, tcx, or fit."
     )]
-    async fn export_activity_file(&self, Parameters(p): Parameters<ExportActivityFile>) -> String {
+    async fn export_activity_file(
+        &self,
+        Parameters(p): Parameters<ExportActivityFile>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let url = self
                 .activity_file_url(&self.auth().await?, &p.label_id, p.sport_type, &p.file_type)
@@ -438,7 +471,10 @@ impl CorosServer {
         .await
     }
     #[tool(description = "List COROS Training Hub plan-library records.")]
-    async fn list_training_plans(&self, Parameters(p): Parameters<Status>) -> String {
+    async fn list_training_plans(
+        &self,
+        Parameters(p): Parameters<Status>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let a = self.auth().await?;
             let status = match p.status.as_deref() {
@@ -455,7 +491,10 @@ impl CorosServer {
         .await
     }
     #[tool(description = "Get a training plan by its stable COROS plan ID.")]
-    async fn get_training_plan(&self, Parameters(p): Parameters<PlanId>) -> String {
+    async fn get_training_plan(
+        &self,
+        Parameters(p): Parameters<PlanId>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let a = self.auth().await?;
             Ok(text(
@@ -471,11 +510,17 @@ impl CorosServer {
         .await
     }
     #[tool(description = "Create a training plan from existing workouts. dryRun defaults to true.")]
-    async fn create_training_plan(&self, Parameters(p): Parameters<CreatePlan>) -> String {
+    async fn create_training_plan(
+        &self,
+        Parameters(p): Parameters<CreatePlan>,
+    ) -> std::result::Result<String, String> {
         result(async{if p.weeks.is_empty(){return Err(anyhow!("At least one week is required."));}let a=self.auth().await?;let anchor=p.start_date.as_deref().map(iso).transpose()?.map(monday);let mut placements=Vec::new();for (week_i,week) in p.weeks.iter().enumerate(){for (order,w) in week.workouts.iter().enumerate(){if w.workout_id.is_some()==w.workout_name.is_some(){return Err(anyhow!("Each workout needs exactly one of workoutId/workoutName."));}let day=if let Some(d)=&w.date{let anchor=anchor.ok_or_else(||anyhow!("startDate is required with exact dates."))?;let day=(iso(d)?-anchor).num_days();if day<0||day/7!=week_i as i64{return Err(anyhow!("Date {d} is outside week {}.",week_i+1));}day}else{let d=match w.weekday.as_deref(){Some("monday")=>0,Some("tuesday")=>1,Some("wednesday")=>2,Some("thursday")=>3,Some("friday")=>4,Some("saturday")=>5,Some("sunday")=>6,_=>return Err(anyhow!("Each workout needs weekday or date."))};week_i as i64*7+d};let id=self.resolve_workout(&a,w.workout_id.as_deref(),w.workout_name.as_deref()).await?;placements.push((day,order as i64,self.workout_detail(&a,&id).await?));}}placements.sort_by_key(|p|(p.0,p.1));let max=placements.iter().map(|p|p.0).max().unwrap();let entities:Vec<_>=placements.iter().enumerate().map(|(i,(day,order,_))|json!({"happenDay":"","idInPlan":i+1,"sortNo":0,"dayNo":day,"sortNoInPlan":order,"sortNoInSchedule":order})).collect();let programs:Vec<_>=placements.into_iter().enumerate().map(|(i,(_,_,mut x))|{x["idInPlan"]=json!(i+1);x["happenDay"]=json!("");x}).collect();let payload=json!({"name":p.name,"overview":p.description.unwrap_or_default(),"entities":entities,"programs":programs,"weekStages":[],"maxIdInPlan":entities.len(),"totalDay":max+1,"unit":0,"sourceId":"425868133463670784","sourceUrl":DEFAULT_SOURCE_URL,"minWeeks":0,"maxWeeks":0,"region":if a.region=="eu"{3}else{1},"pbVersion":2,"versionObjects":(1..=entities.len()).map(|id|json!({"id":id,"status":1})).collect::<Vec<_>>()});if p.dry_run.unwrap_or(true){Ok(dry("/training/plan/add",payload))}else{self.post(&a,"/training/plan/add",payload).await?;Ok("Training plan created.".into())}}).await
     }
     #[tool(description = "List COROS calendar entries for an inclusive ISO date range.")]
-    async fn list_training_calendar(&self, Parameters(p): Parameters<Calendar>) -> String {
+    async fn list_training_calendar(
+        &self,
+        Parameters(p): Parameters<Calendar>,
+    ) -> std::result::Result<String, String> {
         result(async {
             if iso(&p.start_date)? > iso(&p.end_date)? {
                 return Err(anyhow!("startDate must be on or before endDate."));
@@ -500,7 +545,10 @@ impl CorosServer {
     #[tool(
         description = "Schedule one existing workout. dryRun defaults to true and it never replaces entries."
     )]
-    async fn schedule_workout(&self, Parameters(p): Parameters<Schedule>) -> String {
+    async fn schedule_workout(
+        &self,
+        Parameters(p): Parameters<Schedule>,
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.date)?;
             if p.workout_id.is_some() == p.workout_name.is_some() { return Err(anyhow!("Provide exactly one of workoutId or workoutName.")); }
@@ -511,7 +559,7 @@ impl CorosServer {
             let entries = cal["entities"].as_array().cloned().unwrap_or_default();
             if !p.allow_existing_entries.unwrap_or(false) && !entries.is_empty() { return Err(anyhow!("Calendar date {} already has entries.", p.date)); }
             let id = self.resolve_workout(&a, p.workout_id.as_deref(), p.workout_name.as_deref()).await?;
-            let n = cal["maxIdInPlan"].as_i64().unwrap_or(0) + 1;
+            let n = value_i64(&cal["maxIdInPlan"]).unwrap_or(0) + 1;
             let mut program = self.workout_detail(&a, &id).await?; program["idInPlan"] = json!(n);
             let payload = json!({"entities":[{"happenDay":p.date.replace("-", ""),"idInPlan":n,"sortNoInSchedule":entries.len()}],"programs":[program],"versionObjects":[{"id":n,"status":1}],"pbVersion":2});
             if p.dry_run.unwrap_or(true) { Ok(dry("/training/schedule/update", json!({"timezone":tz,"payload":payload}))) } else { self.post(&a,"/training/schedule/update", payload).await?; Ok(format!("Workout {id} scheduled for {} ({tz}).", p.date)) }
@@ -523,7 +571,7 @@ impl CorosServer {
     async fn replace_scheduled_workout(
         &self,
         Parameters(p): Parameters<ReplaceScheduledWorkout>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.date)?;
             if p.replacement_workout_id.is_some() == p.replacement_workout_name.is_some() {
@@ -533,16 +581,16 @@ impl CorosServer {
             timezone.parse::<chrono_tz::Tz>().map_err(|_| anyhow!("Invalid IANA timezone \"{timezone}\"."))?;
             let auth = self.auth().await?;
             let calendar = self.get(&auth, "/training/schedule/query", &[("startDate", p.date.replace("-", "")), ("endDate", p.date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
-            let entry = calendar["entities"].as_array().and_then(|entries| entries.iter().find(|entry| entry["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.date))?;
+            let entry = calendar["entities"].as_array().and_then(|entries| entries.iter().find(|entry| value_i64(&entry["idInPlan"]) == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.date))?;
             let replacement_id = self.resolve_workout(&auth, p.replacement_workout_id.as_deref(), p.replacement_workout_name.as_deref()).await?;
-            let new_id_in_plan = calendar["maxIdInPlan"].as_i64().unwrap_or_default() + 1;
+            let new_id_in_plan = value_i64(&calendar["maxIdInPlan"]).unwrap_or_default() + 1;
             let mut program = self.workout_detail(&auth, &replacement_id).await?;
             program["idInPlan"] = json!(new_id_in_plan);
             let mut removal = json!({"id":p.scheduled_workout_id,"status":3});
             for key in ["planId", "planProgramId", "labelId"] {
                 if !entry[key].is_null() { removal[key] = entry[key].clone(); }
             }
-            let add = json!({"entities":[{"happenDay":p.date.replace("-", ""),"idInPlan":new_id_in_plan,"sortNoInSchedule":entry["sortNoInSchedule"].as_i64().unwrap_or_default()}],"programs":[program],"versionObjects":[{"id":new_id_in_plan,"status":1}],"pbVersion":2});
+            let add = json!({"entities":[{"happenDay":p.date.replace("-", ""),"idInPlan":new_id_in_plan,"sortNoInSchedule":value_i64(&entry["sortNoInSchedule"]).unwrap_or_default()}],"programs":[program],"versionObjects":[{"id":new_id_in_plan,"status":1}],"pbVersion":2});
             let remove = json!({"versionObjects":[removal],"pbVersion":2});
             if p.dry_run.unwrap_or(true) {
                 Ok(dry("/training/schedule/update", json!({"timezone":timezone,"remove":remove,"add":add})))
@@ -560,7 +608,10 @@ impl CorosServer {
     #[tool(
         description = "Remove a calendar entry. Requires confirm true and dryRun false for a live deletion."
     )]
-    async fn remove_scheduled_workout(&self, Parameters(p): Parameters<Remove>) -> String {
+    async fn remove_scheduled_workout(
+        &self,
+        Parameters(p): Parameters<Remove>,
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.date)?;
             let a = self.auth().await?;
@@ -580,7 +631,7 @@ impl CorosServer {
                 .as_array()
                 .and_then(|x| {
                     x.iter()
-                        .find(|x| x["idInPlan"].as_i64() == Some(p.scheduled_workout_id))
+                        .find(|x| value_i64(&x["idInPlan"]) == Some(p.scheduled_workout_id))
                 })
                 .ok_or_else(|| {
                     anyhow!("No scheduled workout with that id exists on {}.", p.date)
@@ -609,7 +660,7 @@ impl CorosServer {
         .await
     }
     #[tool(description = "List user-created Strength exercises.")]
-    async fn list_custom_exercises(&self) -> String {
+    async fn list_custom_exercises(&self) -> std::result::Result<String, String> {
         result(async {
             let a = self.auth().await?;
             let raw = self
@@ -631,13 +682,16 @@ impl CorosServer {
         .await
     }
     #[tool(description = "Create a custom Standard Strength exercise. dryRun defaults to true.")]
-    async fn create_custom_exercise(&self, Parameters(p): Parameters<Custom>) -> String {
+    async fn create_custom_exercise(
+        &self,
+        Parameters(p): Parameters<Custom>,
+    ) -> std::result::Result<String, String> {
         result(async{let parts=[("Whole Body",0),("Chest",2),("Back",3),("Shoulders",4),("Legs/Hips",5),("Arms",6),("Core",7)];let muscles=[("Deltoids",1),("Chest",2),("Latissimus Dorsi",3),("Triceps",4),("Abs",5),("Lower Back",6),("Glutes",7),("Quadriceps",8),("Obliques",9),("Trapezius",10),("Forearms",11),("Biceps",12),("Calves",13),("Posterior Thigh",14),("Hip Flexors",15)];let equipment=[("Bodyweight",1),("Dumbbells",2),("Barbells",3),("Bands",4),("Bosu Ball",5),("Gym Equipment",6),("Exercise Ball",7),("Foam Roller",8),("Medicine Ball",9),("Bench",10),("Kettlebell",11)];let part=code(&parts,&p.body_part).ok_or_else(||anyhow!("Unknown bodyPart \"{}\".",p.body_part))?;let muscle=p.primary_muscle.as_deref().map(|s|code(&muscles,s).ok_or_else(||anyhow!("Unknown primaryMuscle \"{s}\"."))).transpose()?;if part!=0&&muscle.is_none(){return Err(anyhow!("primaryMuscle is required unless bodyPart is Whole Body."));}let eq=p.equipment.as_deref().map(|s|code(&equipment,s).ok_or_else(||anyhow!("Unknown equipment \"{s}\"."))).transpose()?;let payload=json!({"access":1,"sportType":4,"exerciseType":2,"name":p.name,"overview":p.description.unwrap_or_default(),"part":[part],"muscle":muscle.map(|x|vec![x]).unwrap_or_default(),"muscleRelevance":[],"equipment":eq.map(|x|vec![x]).unwrap_or_default(),"intensityCustom":0,"intensityMultiplier":0,"intensityType":1,"intensityValue":0,"intensityValueExtend":0,"restType":1,"restValue":30,"targetType":3,"targetValue":15});if p.dry_run.unwrap_or(true){Ok(dry("/training/exercise/add",payload))}else{self.post(&self.auth().await?,"/training/exercise/add",payload).await?;Ok("Custom Strength exercise created.".into())}}).await
     }
     #[tool(
         description = "Get COROS dashboard data: recovery, HRV, race predictions, and personal records."
     )]
-    async fn get_training_dashboard(&self) -> String {
+    async fn get_training_dashboard(&self) -> std::result::Result<String, String> {
         result(async { Ok(text(self.dashboard(&self.auth().await?).await?)) }).await
     }
     #[tool(
@@ -646,7 +700,7 @@ impl CorosServer {
     async fn get_weekly_training_status(
         &self,
         Parameters(p): Parameters<WeeklyTrainingStatus>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             let end = p.end_date.as_deref().map(iso).transpose()?.unwrap_or_else(|| chrono::Utc::now().date_naive());
             let start = end - chrono::Duration::days(6);
@@ -666,7 +720,10 @@ impl CorosServer {
     #[tool(
         description = "Compare two completed activities by duration, distance, training load, heart rate, and available lap data."
     )]
-    async fn compare_activities(&self, Parameters(p): Parameters<CompareActivities>) -> String {
+    async fn compare_activities(
+        &self,
+        Parameters(p): Parameters<CompareActivities>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let left = self
@@ -690,7 +747,7 @@ impl CorosServer {
     async fn preview_calendar_event(
         &self,
         Parameters(p): Parameters<CalendarEventPreview>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.date)?;
             Ok(dry(
@@ -706,19 +763,25 @@ impl CorosServer {
     async fn build_multisport_session(
         &self,
         Parameters(p): Parameters<MultisportSession>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async { Ok(text(multisport_session_draft(&p)?)) }).await
     }
     #[tool(
         description = "Generate a dry-run, phased race-plan draft from start date to goal date. Review it, then create individual workouts/plans with the write tools."
     )]
-    async fn generate_race_plan(&self, Parameters(p): Parameters<RacePlan>) -> String {
+    async fn generate_race_plan(
+        &self,
+        Parameters(p): Parameters<RacePlan>,
+    ) -> std::result::Result<String, String> {
         result(async { Ok(dry("race-plan-draft", race_plan_draft(&p)?)) }).await
     }
     #[tool(
         description = "Clone a COROS training plan under a new name. dryRun defaults to true; the original plan is never modified."
     )]
-    async fn clone_training_plan(&self, Parameters(p): Parameters<ClonePlan>) -> String {
+    async fn clone_training_plan(
+        &self,
+        Parameters(p): Parameters<ClonePlan>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let mut plan = self
@@ -757,7 +820,10 @@ impl CorosServer {
     #[tool(
         description = "Delete a training plan. dryRun defaults to true; a live deletion requires confirm true."
     )]
-    async fn delete_training_plan(&self, Parameters(p): Parameters<DeletePlan>) -> String {
+    async fn delete_training_plan(
+        &self,
+        Parameters(p): Parameters<DeletePlan>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let payload = json!([p.plan_id]);
             if p.dry_run.unwrap_or(true) {
@@ -780,7 +846,7 @@ impl CorosServer {
     async fn create_guided_run_workout(
         &self,
         Parameters(p): Parameters<CreateGuidedWorkout>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let payload =
@@ -796,7 +862,7 @@ impl CorosServer {
     async fn create_guided_bike_workout(
         &self,
         Parameters(p): Parameters<CreateGuidedWorkout>,
-    ) -> String {
+    ) -> std::result::Result<String, String> {
         result(async {
             let auth = self.auth().await?;
             let payload =
@@ -809,16 +875,19 @@ impl CorosServer {
     #[tool(
         description = "Move a scheduled workout to another date. dryRun defaults to true; a live move adds the destination first and requires confirm true."
     )]
-    async fn reschedule_workout(&self, Parameters(p): Parameters<RescheduleWorkout>) -> String {
+    async fn reschedule_workout(
+        &self,
+        Parameters(p): Parameters<RescheduleWorkout>,
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.from_date)?; iso(&p.to_date)?;
             if p.from_date == p.to_date { return Err(anyhow!("fromDate and toDate must differ.")); }
             let auth = self.auth().await?;
             let source = self.get(&auth, "/training/schedule/query", &[("startDate", p.from_date.replace("-", "")), ("endDate", p.from_date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
-            let entry = source["entities"].as_array().and_then(|items| items.iter().find(|item| item["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.from_date))?;
-            let program = source["programs"].as_array().and_then(|items| items.iter().find(|item| item["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).cloned().ok_or_else(|| anyhow!("COROS calendar response did not include the scheduled workout program."))?;
+            let entry = source["entities"].as_array().and_then(|items| items.iter().find(|item| value_i64(&item["idInPlan"]) == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.from_date))?;
+            let program = source["programs"].as_array().and_then(|items| items.iter().find(|item| value_i64(&item["idInPlan"]) == Some(p.scheduled_workout_id))).cloned().ok_or_else(|| anyhow!("COROS calendar response did not include the scheduled workout program."))?;
             let destination = self.get(&auth, "/training/schedule/query", &[("startDate", p.to_date.replace("-", "")), ("endDate", p.to_date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
-            let new_id = destination["maxIdInPlan"].as_i64().unwrap_or_default() + 1;
+            let new_id = value_i64(&destination["maxIdInPlan"]).unwrap_or_default() + 1;
             let mut add_program = program; add_program["idInPlan"] = json!(new_id);
             let add = json!({"entities":[{"happenDay":p.to_date.replace("-", ""),"idInPlan":new_id,"sortNoInSchedule":destination["entities"].as_array().map_or(0, Vec::len)}],"programs":[add_program],"versionObjects":[{"id":new_id,"status":1}],"pbVersion":2});
             let mut removal = json!({"id":p.scheduled_workout_id,"status":3});
@@ -832,7 +901,10 @@ impl CorosServer {
     #[tool(
         description = "Delete a workout from the COROS library. dryRun defaults to true; a live deletion requires confirm true."
     )]
-    async fn delete_workout(&self, Parameters(p): Parameters<DeleteWorkout>) -> String {
+    async fn delete_workout(
+        &self,
+        Parameters(p): Parameters<DeleteWorkout>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let payload = json!([p.workout_id]);
             if p.dry_run.unwrap_or(true) {
@@ -852,7 +924,7 @@ impl CorosServer {
     #[tool(
         description = "Get a concise COROS performance dashboard with recovery, HRV, personal records, and race predictions."
     )]
-    async fn get_performance_dashboard(&self) -> String {
+    async fn get_performance_dashboard(&self) -> std::result::Result<String, String> {
         result(async {
             Ok(text(performance_dashboard(
                 &self.dashboard(&self.auth().await?).await?,
@@ -863,7 +935,10 @@ impl CorosServer {
     #[tool(
         description = "Compare scheduled calendar sessions with completed activities and suggest a conservative next-week adjustment. This is read-only."
     )]
-    async fn get_plan_adherence(&self, Parameters(p): Parameters<Adherence>) -> String {
+    async fn get_plan_adherence(
+        &self,
+        Parameters(p): Parameters<Adherence>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let start = iso(&p.start_date)?;
             let end = iso(&p.end_date)?;
@@ -900,7 +975,10 @@ impl CorosServer {
     #[tool(
         description = "Forecast calendar conflicts, hard-session clustering, and weekly planned load for an ISO date range. This is read-only."
     )]
-    async fn get_calendar_forecast(&self, Parameters(p): Parameters<Forecast>) -> String {
+    async fn get_calendar_forecast(
+        &self,
+        Parameters(p): Parameters<Forecast>,
+    ) -> std::result::Result<String, String> {
         result(async {
             let start = iso(&p.start_date)?;
             let end = iso(&p.end_date)?;
@@ -927,7 +1005,10 @@ impl CorosServer {
     #[tool(
         description = "Record a local post-workout RPE journal entry (1-10) and optional notes. It never edits COROS activity records."
     )]
-    async fn record_training_journal(&self, Parameters(p): Parameters<JournalEntry>) -> String {
+    async fn record_training_journal(
+        &self,
+        Parameters(p): Parameters<JournalEntry>,
+    ) -> std::result::Result<String, String> {
         result(async {
             iso(&p.date)?;
             if !(1..=10).contains(&p.rpe) {
@@ -948,7 +1029,7 @@ impl CorosServer {
         .await
     }
     #[tool(description = "List locally recorded post-workout RPE journal entries.")]
-    async fn list_training_journal(&self) -> String {
+    async fn list_training_journal(&self) -> std::result::Result<String, String> {
         result(async {
             let path = Self::auth_path()?.with_file_name("journal.json");
             let entries: Value = fs::read_to_string(path)
@@ -962,7 +1043,7 @@ impl CorosServer {
     #[tool(
         description = "Show the heart-rate zones resolved from the current COROS profile for use by guided workout labels."
     )]
-    async fn get_profile_aware_zones(&self) -> String {
+    async fn get_profile_aware_zones(&self) -> std::result::Result<String, String> {
         result(async {
             Ok(text(profile_aware_zones(
                 &self.private_profile(&self.auth().await?).await?,

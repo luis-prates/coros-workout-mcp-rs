@@ -3,11 +3,17 @@ use chrono::{Datelike, NaiveDate};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-pub(crate) async fn result(f: impl std::future::Future<Output = Result<String>>) -> String {
-    match f.await {
-        Ok(s) => s,
-        Err(e) => format!("Error: {e:#}"),
-    }
+pub(crate) async fn result(
+    f: impl std::future::Future<Output = Result<String>>,
+) -> std::result::Result<String, String> {
+    f.await.map_err(|error| format!("{error:#}"))
+}
+
+/// Read COROS numeric fields which may be encoded as JSON numbers or strings.
+pub(crate) fn value_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
 }
 pub(crate) fn text(v: Value) -> String {
     serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
