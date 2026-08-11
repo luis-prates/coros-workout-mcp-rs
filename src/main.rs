@@ -250,6 +250,83 @@ impl CorosServer {
             .or_else(|| matches[0]["id"].as_i64().map(|v| v.to_string()))
             .ok_or_else(|| anyhow!("The workout did not include a stable ID."))
     }
+    async fn activities(
+        &self,
+        auth: &AuthData,
+        page_number: i64,
+        size: i64,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+    ) -> Result<(i64, Vec<Value>)> {
+        // COROS ignores date filters server-side, so also filter this page locally.
+        let mut params = vec![
+            ("pageNumber", page_number.to_string()),
+            ("size", size.to_string()),
+        ];
+        if let Some(date) = start_date {
+            params.push(("startDate", date.to_string()));
+        }
+        if let Some(date) = end_date {
+            params.push(("endDate", date.to_string()));
+        }
+        let data = self.get(auth, "/activity/query", &params).await?["data"].clone();
+        let count = data["count"].as_i64().unwrap_or_default();
+        let activities = data["dataList"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|activity| {
+                let date = activity["date"].as_i64().unwrap_or_default();
+                start_date.is_none_or(|start| date >= start)
+                    && end_date.is_none_or(|end| date <= end)
+            })
+            .collect();
+        Ok((count, activities))
+    }
+    async fn activity_detail(
+        &self,
+        auth: &AuthData,
+        label_id: &str,
+        sport_type: i64,
+    ) -> Result<Value> {
+        use reqwest::header::{CONTENT_TYPE, HeaderValue};
+        let sport_type = sport_type.to_string();
+        let mut headers = Self::headers(auth);
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let response = self
+            .client
+            .post(format!(
+                "{}/activity/detail/query",
+                Self::base_url(&auth.region)?
+            ))
+            .headers(headers)
+            .query(&[
+                ("screenW", "565"),
+                ("screenH", "982"),
+                ("labelId", label_id),
+                ("sportType", &sport_type),
+            ])
+            .body("")
+            .send()
+            .await?;
+        let data = response
+            .json::<Value>()
+            .await
+            .context("COROS returned a non-JSON response")?;
+        if data["result"] != "0000" {
+            return Err(anyhow!(
+                "COROS API error (/activity/detail/query): {}",
+                data["message"]
+                    .as_str()
+                    .unwrap_or_else(|| data["result"].as_str().unwrap_or("unknown"))
+            ));
+        }
+        Ok(data["data"].clone())
+    }
 }
 trait Pipe: Sized {
     fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
@@ -276,6 +353,129 @@ fn code(map: &[(&str, i64)], value: &str) -> Option<i64> {
 }
 fn dry(endpoint: &str, payload: Value) -> String {
     text(json!({"dryRun":true,"endpoint":endpoint,"payload":payload}))
+}
+fn format_activity_date(date: i64) -> String {
+    let date = date.to_string();
+    if date.len() == 8 {
+        format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
+    } else {
+        date
+    }
+}
+fn format_duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+fn sport_type_name(sport_type: i64) -> Option<&'static str> {
+    match sport_type {
+        100 => Some("Run"),
+        101 => Some("Indoor Run"),
+        102 => Some("Trail Run"),
+        200 => Some("Cycling"),
+        201 => Some("Indoor Cycling"),
+        300 => Some("Pool Swim"),
+        301 => Some("Open Water Swim"),
+        400 => Some("Multi-Sport"),
+        401 => Some("Triathlon"),
+        402 => Some("Strength"),
+        403 => Some("Cardio"),
+        404 => Some("GPS Cardio"),
+        500 => Some("Hike"),
+        600 => Some("Ski"),
+        700 => Some("Indoor Walk"),
+        701 => Some("Indoor Rower"),
+        _ => None,
+    }
+}
+fn catalog_name(catalog: &[Value], code_name: &str) -> String {
+    catalog
+        .iter()
+        .find(|exercise| field(exercise, "codeName") == code_name)
+        .map(|exercise| field(exercise, "name").to_owned())
+        .unwrap_or_else(|| code_name.to_owned())
+}
+fn summarize_strength_activity(catalog: &[Value], detail: &Value) -> String {
+    let mut exercises: HashMap<i64, Vec<&Value>> = HashMap::new();
+    for lap in detail["lapList"].as_array().into_iter().flatten() {
+        for item in lap["lapItemList"].as_array().into_iter().flatten() {
+            exercises
+                .entry(item["exerciseIndex"].as_i64().unwrap_or_default())
+                .or_default()
+                .push(item);
+        }
+    }
+    let mut indexes: Vec<_> = exercises.keys().copied().collect();
+    indexes.sort_unstable();
+    let mut lines = Vec::new();
+    for index in indexes {
+        let non_rest: Vec<_> = exercises[&index]
+            .iter()
+            .copied()
+            .filter(|item| !field(item, "exerciseNameKey").starts_with('S'))
+            .collect();
+        let Some(rollup) = non_rest
+            .iter()
+            .copied()
+            .find(|item| item["mode"].as_i64() == Some(16))
+            .or_else(|| non_rest.last().copied())
+        else {
+            continue;
+        };
+        let sets: Vec<_> = non_rest
+            .iter()
+            .copied()
+            .filter(|item| item["mode"].as_i64() == Some(14))
+            .collect();
+        let set_count = rollup["sets"]
+            .as_i64()
+            .unwrap_or_default()
+            .max(sets.len() as i64);
+        let reps = rollup["reps"].as_i64().unwrap_or_default();
+        let exercise_detail = if set_count > 0 && reps > 0 {
+            format!("{set_count}×{} ({reps} reps total)", reps / set_count)
+        } else if reps > 0 {
+            format!("{reps} reps")
+        } else {
+            format!(
+                "{}s",
+                rollup["totalLength"].as_i64().unwrap_or_default() / 1000
+            )
+        };
+        let weights: Vec<_> = sets
+            .iter()
+            .filter_map(|item| item["weight"].as_f64())
+            .map(|weight| weight / 1000.0)
+            .filter(|weight| *weight > 0.0)
+            .collect();
+        let weight_detail = if weights.is_empty() {
+            String::new()
+        } else if weights.iter().all(|weight| *weight == weights[0]) {
+            format!(" @ {}kg", weights[0])
+        } else {
+            format!(
+                " @ {}",
+                weights
+                    .iter()
+                    .map(|weight| format!("{weight}kg"))
+                    .collect::<Vec<_>>()
+                    .join("/")
+            )
+        };
+        lines.push(format!(
+            "  {index}. {} — {exercise_detail}{weight_detail}",
+            catalog_name(catalog, field(rollup, "exerciseNameKey"))
+        ));
+    }
+    lines.join("\n")
 }
 fn iso(date: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| anyhow!("Use ISO YYYY-MM-DD dates."))
@@ -390,6 +590,20 @@ struct Custom {
     primary_muscle: Option<String>,
     equipment: Option<String>,
     dry_run: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ListActivities {
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    limit: Option<i64>,
+    page_number: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ActivityDetail {
+    label_id: String,
+    sport_type: Option<i64>,
 }
 
 #[tool_router]
@@ -578,6 +792,72 @@ impl CorosServer {
     #[tool(description = "List workouts from COROS Training Hub.")]
     async fn list_workouts(&self, Parameters(p): Parameters<ListWorkouts>) -> String {
         result(async { let rows=self.workouts(&self.auth().await?,p.name.as_deref().unwrap_or(""),p.sport_type.unwrap_or(0),p.limit.unwrap_or(10).clamp(1,50)).await?;Ok(if rows.is_empty(){"No workouts found.".into()}else{text(json!(rows.iter().map(|w|json!({"id":w["id"],"name":w["name"],"overview":w["overview"],"sportType":w["sportType"],"duration":w["duration"],"totalSets":w["totalSets"],"exerciseNum":w["exerciseNum"]})).collect::<Vec<_>>()))}) }).await
+    }
+    #[tool(
+        description = "List completed activities recorded by a COROS watch, such as runs, swims, and strength sessions. startDate/endDate are YYYYMMDD integers."
+    )]
+    async fn list_activities(&self, Parameters(p): Parameters<ListActivities>) -> String {
+        result(async {
+            if let (Some(start), Some(end)) = (p.start_date, p.end_date) && start > end {
+                return Err(anyhow!("startDate must be on or before endDate."));
+            }
+            let (count, activities) = self.activities(
+                &self.auth().await?,
+                p.page_number.unwrap_or(1).max(1),
+                p.limit.unwrap_or(20).clamp(1, 50),
+                p.start_date,
+                p.end_date,
+            ).await?;
+            if activities.is_empty() { return Ok("No activities found.".into()); }
+            let formatted = activities.iter().map(|activity| {
+                let sport_type = activity["sportType"].as_i64().unwrap_or_default();
+                let sport = sport_type_name(sport_type).unwrap_or("Unknown sport");
+                let mut metrics = format_duration(activity["totalTime"].as_i64().unwrap_or_default());
+                if let Some(distance) = activity["distance"].as_f64().filter(|value| *value > 0.0) {
+                    metrics.push_str(&format!(", {:.2} km", distance / 1000.0));
+                }
+                if let Some(calories) = activity["calorie"].as_f64().filter(|value| *value > 0.0) {
+                    metrics.push_str(&format!(", {} kcal", (calories / 1000.0).round()));
+                }
+                if let Some(heart_rate) = activity["avgHr"].as_i64().filter(|value| *value > 0) {
+                    metrics.push_str(&format!(", avgHR {heart_rate}"));
+                }
+                if let Some(load) = activity["trainingLoad"].as_i64().filter(|value| *value > 0) {
+                    metrics.push_str(&format!(", TL {load}"));
+                }
+                format!(
+                    "- **{}** ({}, {sport})\n  {metrics}\n  labelId: `{}`, sportType: {sport_type}",
+                    field(activity, "name"),
+                    format_activity_date(activity["date"].as_i64().unwrap_or_default()),
+                    activity["labelId"].as_str().unwrap_or_default(),
+                )
+            }).collect::<Vec<_>>().join("\n");
+            Ok(format!(
+                "Found {} activit{} (total available: {count}):\n\n{formatted}",
+                activities.len(), if activities.len() == 1 { "y" } else { "ies" }
+            ))
+        }).await
+    }
+    #[tool(
+        description = "Get the per-exercise sets, reps, and actual lifted weights for a recorded activity. Use labelId and sportType from list_activities; sportType defaults to 402 (Strength)."
+    )]
+    async fn get_activity_detail(&self, Parameters(p): Parameters<ActivityDetail>) -> String {
+        result(async {
+            let detail = self.activity_detail(&self.auth().await?, &p.label_id, p.sport_type.unwrap_or(402)).await?;
+            let exercise_summary = summarize_strength_activity(&Self::catalog()?, &detail);
+            if exercise_summary.is_empty() { return Ok("No exercise data found for this activity.".into()); }
+            let summary = &detail["summary"];
+            Ok(format!(
+                "Activity {}:\n  Duration: {}, {} kcal, avgHR {}, TL {}\n  Total: {} sets, {} reps\n\nExercises:\n{exercise_summary}",
+                p.label_id,
+                format_duration(summary["totalTime"].as_i64().unwrap_or_default() / 100),
+                (summary["calories"].as_f64().unwrap_or_default() / 1000.0).round(),
+                summary["avgHr"].as_i64().unwrap_or_default(),
+                summary["trainingLoad"].as_i64().unwrap_or_default(),
+                summary["sets"].as_i64().unwrap_or_default(),
+                summary["totalReps"].as_i64().unwrap_or_default(),
+            ))
+        }).await
     }
     #[tool(description = "List COROS Training Hub plan-library records.")]
     async fn list_training_plans(&self, Parameters(p): Parameters<Status>) -> String {
@@ -782,5 +1062,20 @@ mod tests {
     #[test]
     fn coros_code_lookup_is_case_insensitive() {
         assert_eq!(code(&[("Chest", 2)], "cHeSt"), Some(2));
+    }
+
+    #[test]
+    fn strength_activity_summary_uses_actual_weights_and_skips_rest() {
+        let catalog = vec![json!({"codeName": "T1041", "name": "Bench Press"})];
+        let detail = json!({"lapList": [{"lapItemList": [
+            {"exerciseIndex": 1, "exerciseNameKey": "T1041", "mode": 14, "weight": 60000},
+            {"exerciseIndex": 1, "exerciseNameKey": "S3618", "mode": 15},
+            {"exerciseIndex": 1, "exerciseNameKey": "T1041", "mode": 14, "weight": 60000},
+            {"exerciseIndex": 1, "exerciseNameKey": "T1041", "mode": 16, "sets": 2, "reps": 16}
+        ]}]});
+        assert_eq!(
+            summarize_strength_activity(&catalog, &detail),
+            "  1. Bench Press — 2×8 (16 reps total) @ 60kg"
+        );
     }
 }
