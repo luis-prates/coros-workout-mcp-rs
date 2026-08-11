@@ -1,0 +1,19 @@
+[package]
+name = "coros-workout-mcp-rs"
+version = "1.0.0"
+description = "Rust MCP server for creating COROS strength workouts via the Training Hub API"
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+directories = "6"
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rmcp = { version = "3.0.1", features = ["server", "transport-io", "macros", "schemars"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
