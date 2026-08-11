@@ -245,6 +245,18 @@ impl CorosServer {
                 }
             })
     }
+    pub(crate) async fn create_program(&self, auth: &AuthData, mut payload: Value) -> Result<()> {
+        let calculated = self
+            .post(auth, "/training/program/calculate", payload.clone())
+            .await?;
+        for key in ["duration", "totalSets", "trainingLoad", "distance"] {
+            if !calculated["data"][key].is_null() {
+                payload[key] = calculated["data"][key].clone();
+            }
+        }
+        self.post(auth, "/training/program/add", payload).await?;
+        Ok(())
+    }
     pub(crate) async fn resolve_workout(
         &self,
         auth: &AuthData,

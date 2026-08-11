@@ -105,4 +105,74 @@ mod tests {
         assert_eq!(crate::coros_api::activity_file_type_code("fit").unwrap(), 4);
         assert!(crate::coros_api::activity_file_type_code("zip").is_err());
     }
+
+    #[test]
+    fn endurance_payload_has_valid_targets_and_sport_type() {
+        let workout = crate::parameters::CreateEnduranceWorkout {
+            name: "Intervals".into(),
+            overview: None,
+            steps: vec![
+                crate::parameters::EnduranceStep {
+                    kind: "warmup".into(),
+                    name: None,
+                    duration_seconds: Some(600),
+                    distance_meters: None,
+                    intensity_type: None,
+                    intensity_value: None,
+                    intensity_value_extend: None,
+                    intensity_display_unit: None,
+                },
+                crate::parameters::EnduranceStep {
+                    kind: "training".into(),
+                    name: Some("400m".into()),
+                    duration_seconds: None,
+                    distance_meters: Some(400.0),
+                    intensity_type: Some(1),
+                    intensity_value: Some(300),
+                    intensity_value_extend: None,
+                    intensity_display_unit: Some(0),
+                },
+            ],
+        };
+        let payload = crate::tools::endurance_workout_payload(&workout, 1).unwrap();
+        assert_eq!(payload["sportType"], 1);
+        assert_eq!(payload["exercises"][0]["targetValue"], 600);
+        assert_eq!(payload["exercises"][1]["targetValue"], 40_000);
+    }
+
+    #[test]
+    fn workout_patch_clones_and_preserves_original_identity() {
+        let original =
+            json!({"id":"123","name":"Original","exercises":[{"name":"Easy","targetValue":300}]});
+        let update = crate::parameters::UpdateWorkout {
+            workout_id: "123".into(),
+            name: Some("Edited".into()),
+            dry_run: Some(true),
+            step_updates: vec![crate::parameters::WorkoutStepUpdate {
+                index: 0,
+                name: Some("Hard".into()),
+                target_type: None,
+                target_value: Some(600),
+                intensity_type: None,
+                intensity_value: None,
+                intensity_value_extend: None,
+                intensity_display_unit: None,
+            }],
+        };
+        let clone = crate::tools::clone_workout_payload(original, &update).unwrap();
+        assert_eq!(clone["id"], "0");
+        assert_eq!(clone["name"], "Edited");
+        assert_eq!(clone["exercises"][0]["name"], "Hard");
+        assert_eq!(clone["exercises"][0]["targetValue"], 600);
+    }
+
+    #[test]
+    fn generic_activity_detail_keeps_laps_and_zones() {
+        let overview = activity_detail_overview(&json!({
+            "summary":{"avgHr":145}, "lapList":[{"lapDistance":1000}], "hrZoneList":[{"zone":3}], "powerZoneList":[{"zone":4}]
+        }));
+        assert_eq!(overview["summary"]["avgHr"], 145);
+        assert_eq!(overview["laps"][0]["lapDistance"], 1000);
+        assert_eq!(overview["heartRateZones"][0]["zone"], 3);
+    }
 }

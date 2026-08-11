@@ -34,6 +34,49 @@ pub(crate) struct CreateWorkout {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct EnduranceStep {
+    /// warmup, training, rest, or cooldown.
+    pub(crate) kind: String,
+    pub(crate) name: Option<String>,
+    /// One of durationSeconds or distanceMeters is required.
+    pub(crate) duration_seconds: Option<i64>,
+    pub(crate) distance_meters: Option<f64>,
+    /// COROS intensity mode; omit for an open-ended step.
+    pub(crate) intensity_type: Option<i64>,
+    pub(crate) intensity_value: Option<i64>,
+    pub(crate) intensity_value_extend: Option<i64>,
+    pub(crate) intensity_display_unit: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateEnduranceWorkout {
+    pub(crate) name: String,
+    pub(crate) overview: Option<String>,
+    pub(crate) steps: Vec<EnduranceStep>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkoutStepUpdate {
+    /// Zero-based exercise/step index in the workout detail.
+    pub(crate) index: usize,
+    pub(crate) name: Option<String>,
+    pub(crate) target_type: Option<i64>,
+    pub(crate) target_value: Option<i64>,
+    pub(crate) intensity_type: Option<i64>,
+    pub(crate) intensity_value: Option<i64>,
+    pub(crate) intensity_value_extend: Option<i64>,
+    pub(crate) intensity_display_unit: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateWorkout {
+    pub(crate) workout_id: String,
+    pub(crate) name: Option<String>,
+    pub(crate) step_updates: Vec<WorkoutStepUpdate>,
+    pub(crate) dry_run: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct UpdateExercises {
     pub(crate) sport_type: Option<i64>,
 }
@@ -97,6 +140,17 @@ pub(crate) struct Remove {
     pub(crate) scheduled_workout_id: i64,
     pub(crate) confirm: Option<bool>,
     pub(crate) dry_run: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReplaceScheduledWorkout {
+    pub(crate) date: String,
+    pub(crate) scheduled_workout_id: i64,
+    pub(crate) replacement_workout_id: Option<String>,
+    pub(crate) replacement_workout_name: Option<String>,
+    pub(crate) timezone: Option<String>,
+    pub(crate) dry_run: Option<bool>,
+    pub(crate) confirm: Option<bool>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

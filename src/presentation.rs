@@ -146,6 +146,16 @@ pub(crate) fn summarize_strength_activity(catalog: &[Value], detail: &Value) -> 
     }
     lines.join("\n")
 }
+pub(crate) fn activity_detail_overview(detail: &Value) -> Value {
+    let summary = &detail["summary"];
+    json!({
+        "summary": summary,
+        "laps": detail["lapList"],
+        "heartRateZones": detail["hrZoneList"],
+        "powerZones": detail["powerZoneList"],
+        "trainingEffect": detail["trainingEffect"],
+    })
+}
 pub(crate) fn iso(date: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| anyhow!("Use ISO YYYY-MM-DD dates."))
 }

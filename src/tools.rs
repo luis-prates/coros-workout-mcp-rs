@@ -212,6 +212,60 @@ impl CorosServer {
         result(async { let rows=self.workouts(&self.auth().await?,p.name.as_deref().unwrap_or(""),p.sport_type.unwrap_or(0),p.limit.unwrap_or(10).clamp(1,50)).await?;Ok(if rows.is_empty(){"No workouts found.".into()}else{text(json!(rows.iter().map(|w|json!({"id":w["id"],"name":w["name"],"overview":w["overview"],"sportType":w["sportType"],"duration":w["duration"],"totalSets":w["totalSets"],"exerciseNum":w["exerciseNum"]})).collect::<Vec<_>>()))}) }).await
     }
     #[tool(
+        description = "Create a structured running workout on COROS Training Hub. Each step needs exactly one of durationSeconds or distanceMeters."
+    )]
+    async fn create_run_workout(
+        &self,
+        Parameters(p): Parameters<CreateEnduranceWorkout>,
+    ) -> String {
+        result(async {
+            let payload = endurance_workout_payload(&p, 1)?;
+            self.create_program(&self.auth().await?, payload).await?;
+            Ok(format!(
+                "Running workout \"{}\" created successfully.",
+                p.name
+            ))
+        })
+        .await
+    }
+    #[tool(
+        description = "Create a structured cycling workout on COROS Training Hub. Each step needs exactly one of durationSeconds or distanceMeters."
+    )]
+    async fn create_bike_workout(
+        &self,
+        Parameters(p): Parameters<CreateEnduranceWorkout>,
+    ) -> String {
+        result(async {
+            let payload = endurance_workout_payload(&p, 2)?;
+            self.create_program(&self.auth().await?, payload).await?;
+            Ok(format!(
+                "Cycling workout \"{}\" created successfully.",
+                p.name
+            ))
+        })
+        .await
+    }
+    #[tool(
+        description = "Clone an existing workout and patch selected zero-based steps. dryRun defaults to true; the original workout is never changed."
+    )]
+    async fn update_workout(&self, Parameters(p): Parameters<UpdateWorkout>) -> String {
+        result(async {
+            let auth = self.auth().await?;
+            let original = self.workout_detail(&auth, &p.workout_id).await?;
+            let payload = clone_workout_payload(original, &p)?;
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/program/add", payload))
+            } else {
+                self.create_program(&auth, payload).await?;
+                Ok(
+                    "Updated workout created as a new COROS workout; the original was preserved."
+                        .into(),
+                )
+            }
+        })
+        .await
+    }
+    #[tool(
         description = "List completed activities recorded by a COROS watch. startDate/endDate are YYYYMMDD integers; sportTypes optionally filters by COROS sport type IDs."
     )]
     async fn list_activities(&self, Parameters(p): Parameters<ListActivities>) -> String {
@@ -258,13 +312,30 @@ impl CorosServer {
         }).await
     }
     #[tool(
-        description = "Get the per-exercise sets, reps, and actual lifted weights for a recorded activity. Use labelId and sportType from list_activities; sportType defaults to 402 (Strength)."
+        description = "Get completed activity details. Strength activities include lifted sets; other sports return summary, laps, and available HR/power zones. Use labelId and sportType from list_activities; sportType defaults to 402 (Strength)."
     )]
     async fn get_activity_detail(&self, Parameters(p): Parameters<ActivityDetail>) -> String {
         result(async {
-            let detail = self.activity_detail(&self.auth().await?, &p.label_id, p.sport_type.unwrap_or(402)).await?;
+            let sport_type = p.sport_type.unwrap_or(402);
+            let detail = self
+                .activity_detail(&self.auth().await?, &p.label_id, sport_type)
+                .await?;
+            if sport_type != 402 {
+                return Ok(format!(
+                    "Activity {} ({}) detail:\n{}",
+                    p.label_id,
+                    sport_type_name(sport_type).unwrap_or("Unknown sport"),
+                    text(activity_detail_overview(&detail))
+                ));
+            }
             let exercise_summary = summarize_strength_activity(&Self::catalog()?, &detail);
-            if exercise_summary.is_empty() { return Ok("No exercise data found for this activity.".into()); }
+            if exercise_summary.is_empty() {
+                return Ok(format!(
+                    "Activity {} detail:\n{}",
+                    p.label_id,
+                    text(activity_detail_overview(&detail))
+                ));
+            }
             let summary = &detail["summary"];
             Ok(format!(
                 "Activity {}:\n  Duration: {}, {} kcal, avgHR {}, TL {}\n  Total: {} sets, {} reps\n\nExercises:\n{exercise_summary}",
@@ -276,7 +347,8 @@ impl CorosServer {
                 summary["sets"].as_i64().unwrap_or_default(),
                 summary["totalReps"].as_i64().unwrap_or_default(),
             ))
-        }).await
+        })
+        .await
     }
     #[tool(description = "List COROS sport type IDs and their current names from the service.")]
     async fn get_sport_types(&self) -> String {
@@ -395,7 +467,47 @@ impl CorosServer {
             let n = cal["maxIdInPlan"].as_i64().unwrap_or(0) + 1;
             let mut program = self.workout_detail(&a, &id).await?; program["idInPlan"] = json!(n);
             let payload = json!({"entities":[{"happenDay":p.date.replace("-", ""),"idInPlan":n,"sortNoInSchedule":entries.len()}],"programs":[program],"versionObjects":[{"id":n,"status":1}],"pbVersion":2});
-            if p.dry_run.unwrap_or(true) { Ok(dry("/training/schedule/update", json!({"timezone":tz,"payload":payload}))) } else { self.post(&a, "/training/schedule/update", payload).await?; Ok(format!("Workout {id} scheduled for {} ({tz}).", p.date)) }
+            if p.dry_run.unwrap_or(true) { Ok(dry("/training/schedule/update", json!({"timezone":tz,"payload":payload}))) } else { self.post(&a,"/training/schedule/update", payload).await?; Ok(format!("Workout {id} scheduled for {} ({tz}).", p.date)) }
+        }).await
+    }
+    #[tool(
+        description = "Replace one scheduled calendar workout with another. dryRun defaults to true; live replacement requires confirm true."
+    )]
+    async fn replace_scheduled_workout(
+        &self,
+        Parameters(p): Parameters<ReplaceScheduledWorkout>,
+    ) -> String {
+        result(async {
+            iso(&p.date)?;
+            if p.replacement_workout_id.is_some() == p.replacement_workout_name.is_some() {
+                return Err(anyhow!("Provide exactly one of replacementWorkoutId or replacementWorkoutName."));
+            }
+            let timezone = p.timezone.unwrap_or_else(|| "UTC".into());
+            timezone.parse::<chrono_tz::Tz>().map_err(|_| anyhow!("Invalid IANA timezone \"{timezone}\"."))?;
+            let auth = self.auth().await?;
+            let calendar = self.get(&auth, "/training/schedule/query", &[("startDate", p.date.replace("-", "")), ("endDate", p.date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
+            let entry = calendar["entities"].as_array().and_then(|entries| entries.iter().find(|entry| entry["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.date))?;
+            let replacement_id = self.resolve_workout(&auth, p.replacement_workout_id.as_deref(), p.replacement_workout_name.as_deref()).await?;
+            let new_id_in_plan = calendar["maxIdInPlan"].as_i64().unwrap_or_default() + 1;
+            let mut program = self.workout_detail(&auth, &replacement_id).await?;
+            program["idInPlan"] = json!(new_id_in_plan);
+            let mut removal = json!({"id":p.scheduled_workout_id,"status":3});
+            for key in ["planId", "planProgramId", "labelId"] {
+                if !entry[key].is_null() { removal[key] = entry[key].clone(); }
+            }
+            let add = json!({"entities":[{"happenDay":p.date.replace("-", ""),"idInPlan":new_id_in_plan,"sortNoInSchedule":entry["sortNoInSchedule"].as_i64().unwrap_or_default()}],"programs":[program],"versionObjects":[{"id":new_id_in_plan,"status":1}],"pbVersion":2});
+            let remove = json!({"versionObjects":[removal],"pbVersion":2});
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/schedule/update", json!({"timezone":timezone,"remove":remove,"add":add})))
+            } else if !p.confirm.unwrap_or(false) {
+                Err(anyhow!("Set confirm: true with dryRun: false to replace this calendar entry."))
+            } else {
+                self.post(&auth, "/training/schedule/update", remove).await?;
+                if let Err(error) = self.post(&auth, "/training/schedule/update", add).await {
+                    return Err(anyhow!("The original entry was removed but adding replacement {replacement_id} failed: {error}"));
+                }
+                Ok(format!("Scheduled workout {} replaced with {replacement_id} on {} ({timezone}).", p.scheduled_workout_id, p.date))
+            }
         }).await
     }
     #[tool(
@@ -475,4 +587,96 @@ impl CorosServer {
     async fn create_custom_exercise(&self, Parameters(p): Parameters<Custom>) -> String {
         result(async{let parts=[("Whole Body",0),("Chest",2),("Back",3),("Shoulders",4),("Legs/Hips",5),("Arms",6),("Core",7)];let muscles=[("Deltoids",1),("Chest",2),("Latissimus Dorsi",3),("Triceps",4),("Abs",5),("Lower Back",6),("Glutes",7),("Quadriceps",8),("Obliques",9),("Trapezius",10),("Forearms",11),("Biceps",12),("Calves",13),("Posterior Thigh",14),("Hip Flexors",15)];let equipment=[("Bodyweight",1),("Dumbbells",2),("Barbells",3),("Bands",4),("Bosu Ball",5),("Gym Equipment",6),("Exercise Ball",7),("Foam Roller",8),("Medicine Ball",9),("Bench",10),("Kettlebell",11)];let part=code(&parts,&p.body_part).ok_or_else(||anyhow!("Unknown bodyPart \"{}\".",p.body_part))?;let muscle=p.primary_muscle.as_deref().map(|s|code(&muscles,s).ok_or_else(||anyhow!("Unknown primaryMuscle \"{s}\"."))).transpose()?;if part!=0&&muscle.is_none(){return Err(anyhow!("primaryMuscle is required unless bodyPart is Whole Body."));}let eq=p.equipment.as_deref().map(|s|code(&equipment,s).ok_or_else(||anyhow!("Unknown equipment \"{s}\"."))).transpose()?;let payload=json!({"access":1,"sportType":4,"exerciseType":2,"name":p.name,"overview":p.description.unwrap_or_default(),"part":[part],"muscle":muscle.map(|x|vec![x]).unwrap_or_default(),"muscleRelevance":[],"equipment":eq.map(|x|vec![x]).unwrap_or_default(),"intensityCustom":0,"intensityMultiplier":0,"intensityType":1,"intensityValue":0,"intensityValueExtend":0,"restType":1,"restValue":30,"targetType":3,"targetValue":15});if p.dry_run.unwrap_or(true){Ok(dry("/training/exercise/add",payload))}else{self.post(&self.auth().await?,"/training/exercise/add",payload).await?;Ok("Custom Strength exercise created.".into())}}).await
     }
+}
+
+pub(crate) fn endurance_workout_payload(
+    p: &CreateEnduranceWorkout,
+    sport_type: i64,
+) -> anyhow::Result<Value> {
+    if p.steps.is_empty() {
+        return Err(anyhow!("At least one step is required."));
+    }
+    let mut total_seconds = 0_i64;
+    let mut total_distance = 0_i64;
+    let exercises = p.steps.iter().enumerate().map(|(index, step)| {
+        let kind = code(&[("warmup", 1), ("training", 2), ("rest", 3), ("cooldown", 4)], &step.kind)
+            .ok_or_else(|| anyhow!("Step {} has unknown kind \"{}\". Use warmup, training, rest, or cooldown.", index + 1, step.kind))?;
+        let has_duration = step.duration_seconds.is_some();
+        let has_distance = step.distance_meters.is_some();
+        if has_duration == has_distance { return Err(anyhow!("Step {} needs exactly one of durationSeconds or distanceMeters.", index + 1)); }
+        let (target_type, target_value, target_display_unit) = if let Some(seconds) = step.duration_seconds {
+            if seconds <= 0 { return Err(anyhow!("Step {} durationSeconds must be positive.", index + 1)); }
+            total_seconds += seconds;
+            (2, seconds, 0)
+        } else {
+            let meters = step.distance_meters.unwrap_or_default();
+            if !meters.is_finite() || meters <= 0.0 { return Err(anyhow!("Step {} distanceMeters must be positive.", index + 1)); }
+            let value = (meters * 100.0).round() as i64;
+            total_distance += value;
+            (5, value, 3)
+        };
+        Ok(json!({
+            "access":0,"defaultOrder":index,"id":index + 1,"sortNo":index + 1,"name":step.name.clone().unwrap_or_else(|| step.kind.clone()),
+            "nameText":step.name.clone().unwrap_or_else(|| step.kind.clone()),"overview":"","originId":"0","groupId":"","isGroup":false,"isIntensityPercent":false,
+            "sportType":sport_type,"exerciseType":kind,"sets":1,"targetType":target_type,"targetValue":target_value,"targetDisplayUnit":target_display_unit,
+            "intensityType":step.intensity_type.unwrap_or(0),"intensityValue":step.intensity_value.unwrap_or(0),"intensityValueExtend":step.intensity_value_extend.unwrap_or(0),"intensityDisplayUnit":step.intensity_display_unit.unwrap_or(0),
+            "restType":3,"restValue":0,"hrType":3
+        }))
+    }).collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(json!({
+        "access":1,"authorId":"0","createTimestamp":0,"distance":total_distance,"duration":total_seconds,"essence":0,"estimatedType":0,"estimatedValue":0,"exerciseNum":exercises.len(),"exercises":exercises,
+        "headPic":"","id":"0","idInPlan":"0","name":p.name,"nickname":"","originEssence":0,"overview":p.overview.clone().unwrap_or_default(),"pbVersion":2,"planIdIndex":0,"poolLength":2500,"profile":"",
+        "referExercise":{"intensityType":0,"hrType":3,"valueType":1},"sex":0,"shareUrl":"","simple":false,"sourceUrl":DEFAULT_SOURCE_URL,"sportType":sport_type,"star":0,"subType":65535,"targetType":0,"targetValue":0,"thirdPartyId":0,"totalSets":0,"trainingLoad":0,"type":0,"unit":0,"userId":"0","version":0,"videoCoverUrl":"","videoUrl":"","poolLengthId":1,"poolLengthUnit":2,"sourceId":"425868133463670784"
+    }))
+}
+
+pub(crate) fn clone_workout_payload(
+    mut workout: Value,
+    update: &UpdateWorkout,
+) -> anyhow::Result<Value> {
+    let exercises = workout["exercises"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("COROS workout detail did not include editable steps."))?;
+    for patch in &update.step_updates {
+        let step = exercises
+            .get_mut(patch.index)
+            .ok_or_else(|| anyhow!("Step index {} is outside this workout.", patch.index))?;
+        for (key, value) in [
+            ("name", patch.name.clone().map(Value::String)),
+            ("nameText", patch.name.clone().map(Value::String)),
+            ("targetType", patch.target_type.map(|value| json!(value))),
+            ("targetValue", patch.target_value.map(|value| json!(value))),
+            (
+                "intensityType",
+                patch.intensity_type.map(|value| json!(value)),
+            ),
+            (
+                "intensityValue",
+                patch.intensity_value.map(|value| json!(value)),
+            ),
+            (
+                "intensityValueExtend",
+                patch.intensity_value_extend.map(|value| json!(value)),
+            ),
+            (
+                "intensityDisplayUnit",
+                patch.intensity_display_unit.map(|value| json!(value)),
+            ),
+        ] {
+            if let Some(value) = value {
+                step[key] = value;
+            }
+        }
+    }
+    if let Some(name) = &update.name {
+        workout["name"] = json!(name);
+    }
+    for key in ["id", "idInPlan", "authorId", "userId"] {
+        workout[key] = json!("0");
+    }
+    for key in ["createTimestamp", "version", "star", "planIdIndex"] {
+        workout[key] = json!(0);
+    }
+    workout["sourceUrl"] = json!(DEFAULT_SOURCE_URL);
+    Ok(workout)
 }
