@@ -74,6 +74,7 @@ pub(crate) struct UpdateWorkout {
     pub(crate) name: Option<String>,
     pub(crate) step_updates: Vec<WorkoutStepUpdate>,
     pub(crate) dry_run: Option<bool>,
+    pub(crate) confirm: Option<bool>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -300,4 +301,11 @@ pub(crate) struct JournalEntry {
     pub(crate) rpe: i64,
     pub(crate) notes: Option<String>,
     pub(crate) label_id: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Forecast {
+    pub(crate) start_date: String,
+    pub(crate) end_date: String,
 }

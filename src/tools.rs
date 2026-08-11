@@ -266,6 +266,48 @@ impl CorosServer {
         .await
     }
     #[tool(
+        description = "Patch a COROS workout in place. dryRun defaults to true; a live update requires confirm true and replaces the original workout definition."
+    )]
+    async fn update_workout_in_place(&self, Parameters(p): Parameters<UpdateWorkout>) -> String {
+        result(async {
+            let auth = self.auth().await?;
+            let original = self.workout_detail(&auth, &p.workout_id).await?;
+            let mut payload = clone_workout_payload(original.clone(), &p)?;
+            for key in [
+                "id",
+                "idInPlan",
+                "authorId",
+                "userId",
+                "createTimestamp",
+                "version",
+                "star",
+                "planIdIndex",
+            ] {
+                payload[key] = original[key].clone();
+            }
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/program/update", payload))
+            } else if !p.confirm.unwrap_or(false) {
+                Err(anyhow!(
+                    "Set confirm: true with dryRun: false to update this workout in place."
+                ))
+            } else {
+                let calculated = self
+                    .post(&auth, "/training/program/calculate", payload.clone())
+                    .await?;
+                for key in ["duration", "totalSets", "trainingLoad", "distance"] {
+                    if !calculated["data"][key].is_null() {
+                        payload[key] = calculated["data"][key].clone();
+                    }
+                }
+                self.post(&auth, "/training/program/update", payload)
+                    .await?;
+                Ok("Workout updated in place.".into())
+            }
+        })
+        .await
+    }
+    #[tool(
         description = "List completed activities recorded by a COROS watch. startDate/endDate are YYYYMMDD integers; sportTypes optionally filters by COROS sport type IDs."
     )]
     async fn list_activities(&self, Parameters(p): Parameters<ListActivities>) -> String {
@@ -735,8 +777,10 @@ impl CorosServer {
         Parameters(p): Parameters<CreateGuidedWorkout>,
     ) -> String {
         result(async {
-            let payload = guided_workout_payload(&p, 1)?;
-            self.create_program(&self.auth().await?, payload).await?;
+            let auth = self.auth().await?;
+            let payload =
+                profile_guided_workout_payload(&p, 1, &self.private_profile(&auth).await?)?;
+            self.create_program(&auth, payload).await?;
             Ok(format!("Guided run workout \"{}\" created.", p.name))
         })
         .await
@@ -749,8 +793,10 @@ impl CorosServer {
         Parameters(p): Parameters<CreateGuidedWorkout>,
     ) -> String {
         result(async {
-            let payload = guided_workout_payload(&p, 2)?;
-            self.create_program(&self.auth().await?, payload).await?;
+            let auth = self.auth().await?;
+            let payload =
+                profile_guided_workout_payload(&p, 2, &self.private_profile(&auth).await?)?;
+            self.create_program(&auth, payload).await?;
             Ok(format!("Guided bike workout \"{}\" created.", p.name))
         })
         .await
@@ -847,6 +893,33 @@ impl CorosServer {
         .await
     }
     #[tool(
+        description = "Forecast calendar conflicts, hard-session clustering, and weekly planned load for an ISO date range. This is read-only."
+    )]
+    async fn get_calendar_forecast(&self, Parameters(p): Parameters<Forecast>) -> String {
+        result(async {
+            let start = iso(&p.start_date)?;
+            let end = iso(&p.end_date)?;
+            if start > end {
+                return Err(anyhow!("startDate must be on or before endDate."));
+            }
+            let auth = self.auth().await?;
+            let calendar = self
+                .get(
+                    &auth,
+                    "/training/schedule/query",
+                    &[
+                        ("startDate", p.start_date.replace("-", "")),
+                        ("endDate", p.end_date.replace("-", "")),
+                        ("supportRestExercise", "1".into()),
+                    ],
+                )
+                .await?["data"]
+                .clone();
+            Ok(text(calendar_forecast(&calendar)))
+        })
+        .await
+    }
+    #[tool(
         description = "Record a local post-workout RPE journal entry (1-10) and optional notes. It never edits COROS activity records."
     )]
     async fn record_training_journal(&self, Parameters(p): Parameters<JournalEntry>) -> String {
@@ -878,6 +951,17 @@ impl CorosServer {
                 .and_then(|raw| serde_json::from_str(&raw).ok())
                 .unwrap_or_else(|| json!([]));
             Ok(text(entries))
+        })
+        .await
+    }
+    #[tool(
+        description = "Show the heart-rate zones resolved from the current COROS profile for use by guided workout labels."
+    )]
+    async fn get_profile_aware_zones(&self) -> String {
+        result(async {
+            Ok(text(profile_aware_zones(
+                &self.private_profile(&self.auth().await?).await?,
+            )))
         })
         .await
     }
@@ -1212,4 +1296,123 @@ pub(crate) fn plan_adherence_summary(
         None => "No scheduled workouts in this range; create a plan before measuring adherence.",
     };
     json!({"range":{"startDay":start_day,"endDay":end_day},"plannedDays":planned,"completedDays":completed,"missedPlannedDays":missed,"adherence":adherence,"suggestedNextWeekAdjustment":suggestion})
+}
+
+fn calendar_forecast(calendar: &Value) -> Value {
+    let entities = calendar["entities"].as_array().cloned().unwrap_or_default();
+    let programs = calendar["programs"].as_array().cloned().unwrap_or_default();
+    let mut by_day: std::collections::BTreeMap<String, Vec<&Value>> =
+        std::collections::BTreeMap::new();
+    for entry in &entities {
+        let day = entry["happenDay"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| entry["happenDay"].to_string());
+        by_day.entry(day).or_default().push(entry);
+    }
+    let conflicts: Vec<_> = by_day
+        .iter()
+        .filter(|(_, entries)| entries.len() > 1)
+        .map(|(day, entries)| json!({"date":day,"scheduledCount":entries.len()}))
+        .collect();
+    let mut weekly_load: std::collections::BTreeMap<String, f64> =
+        std::collections::BTreeMap::new();
+    for program in &programs {
+        let day = program["happenDay"].as_str().unwrap_or("unscheduled");
+        let week = day.get(0..6).unwrap_or(day).to_string();
+        *weekly_load.entry(week).or_default() += program["trainingLoad"]
+            .as_f64()
+            .or_else(|| program["trainingLoad"].as_i64().map(|value| value as f64))
+            .unwrap_or_default();
+    }
+    let hard_days: Vec<_> = programs.iter().filter(|program| program["trainingLoad"].as_f64().or_else(|| program["trainingLoad"].as_i64().map(|value| value as f64)).unwrap_or_default() >= 100.0).map(|program| json!({"date":program["happenDay"],"name":program["name"],"trainingLoad":program["trainingLoad"]})).collect();
+    let suggestions = if !conflicts.is_empty() {
+        vec!["Resolve same-day workout conflicts before syncing."]
+    } else if hard_days.len() >= 2 {
+        vec!["Review hard-session spacing; preserve recovery between high-load days."]
+    } else {
+        vec!["No obvious calendar conflicts detected; progress planned load conservatively."]
+    };
+    json!({"sameDayConflicts":conflicts,"hardSessions":hard_days,"weeklyPlannedLoad":weekly_load,"suggestions":suggestions})
+}
+
+fn profile_guided_workout_payload(
+    workout: &CreateGuidedWorkout,
+    sport_type: i64,
+    profile: &Value,
+) -> anyhow::Result<Value> {
+    let mut payload = guided_workout_payload(workout, sport_type)?;
+    let labels = workout.steps.iter().flat_map(|step| {
+        std::iter::repeat_n(
+            step.intensity.clone(),
+            step.repeat.unwrap_or(1).max(0) as usize,
+        )
+    });
+    for (exercise, intensity) in payload["exercises"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .zip(labels)
+    {
+        let Some(label) = intensity else {
+            continue;
+        };
+        if let Some((low, high)) = profile_hr_range(profile, &label) {
+            exercise["intensityType"] = json!(2);
+            exercise["hrType"] = json!(1);
+            exercise["isIntensityPercent"] = json!(false);
+            exercise["intensityValue"] = json!(low);
+            exercise["intensityValueExtend"] = json!(high);
+        }
+    }
+    Ok(payload)
+}
+
+fn profile_zone_data(profile: &Value) -> Value {
+    match profile["zoneData"]
+        .as_str()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+    {
+        Some(value) => value,
+        None => profile["zoneData"].clone(),
+    }
+}
+
+fn profile_hr_range(profile: &Value, label: &str) -> Option<(i64, i64)> {
+    let index = match label.trim().to_ascii_lowercase().as_str() {
+        "easy" => 1,
+        "aerobic" => 2,
+        "tempo" => 3,
+        "threshold" => 4,
+        "vo2" => 5,
+        _ => return None,
+    };
+    let zones = profile_zone_data(profile);
+    let entries = ["maxHrZone", "maxHrZones", "heartRateZone"]
+        .iter()
+        .find_map(|key| zones[*key].as_array().or_else(|| profile[*key].as_array()))?;
+    let value = |entry: &Value| {
+        entry["hr"]
+            .as_i64()
+            .or_else(|| entry["value"].as_i64())
+            .or_else(|| entry["low"].as_i64())
+    };
+    let low = value(entries.get(index)?)?;
+    let high = entries
+        .get(index + 1)
+        .and_then(value)
+        .map(|value| value - 1)
+        .or_else(|| profile["maxHr"].as_i64())
+        .unwrap_or(low);
+    Some((low, high.max(low)))
+}
+
+fn profile_aware_zones(profile: &Value) -> Value {
+    let zones = profile_zone_data(profile);
+    let entries = ["maxHrZone", "maxHrZones", "heartRateZone"]
+        .iter()
+        .find_map(|key| zones[*key].as_array().or_else(|| profile[*key].as_array()))
+        .cloned()
+        .unwrap_or_default();
+    json!({"maxHr":zones["maxHr"].as_i64().or_else(|| profile["maxHr"].as_i64()),"heartRateZones":entries,"labelMapping":{"easy":"profile HR zone 2","aerobic":"profile HR zone 3","tempo":"profile HR zone 4","threshold":"profile HR zone 5","vo2":"profile HR zone 6"}})
 }

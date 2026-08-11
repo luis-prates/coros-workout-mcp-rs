@@ -148,6 +148,7 @@ mod tests {
             workout_id: "123".into(),
             name: Some("Edited".into()),
             dry_run: Some(true),
+            confirm: None,
             step_updates: vec![crate::parameters::WorkoutStepUpdate {
                 index: 0,
                 name: Some("Hard".into()),
