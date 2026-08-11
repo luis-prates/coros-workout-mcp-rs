@@ -253,3 +253,51 @@ pub(crate) struct DeletePlan {
     pub(crate) confirm: Option<bool>,
     pub(crate) dry_run: Option<bool>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GuidedStep {
+    pub(crate) kind: String,
+    pub(crate) duration_seconds: Option<i64>,
+    pub(crate) distance_meters: Option<f64>,
+    /// easy, aerobic, tempo, threshold, vo2, rpe:N, hr:LOW-HIGH, or pace:LOW-HIGH seconds/km.
+    pub(crate) intensity: Option<String>,
+    pub(crate) repeat: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateGuidedWorkout {
+    pub(crate) name: String,
+    pub(crate) overview: Option<String>,
+    pub(crate) steps: Vec<GuidedStep>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RescheduleWorkout {
+    pub(crate) from_date: String,
+    pub(crate) to_date: String,
+    pub(crate) scheduled_workout_id: i64,
+    pub(crate) dry_run: Option<bool>,
+    pub(crate) confirm: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeleteWorkout {
+    pub(crate) workout_id: String,
+    pub(crate) dry_run: Option<bool>,
+    pub(crate) confirm: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Adherence {
+    pub(crate) start_date: String,
+    pub(crate) end_date: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct JournalEntry {
+    pub(crate) date: String,
+    pub(crate) rpe: i64,
+    pub(crate) notes: Option<String>,
+    pub(crate) label_id: Option<String>,
+}

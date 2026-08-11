@@ -214,4 +214,38 @@ mod tests {
         assert!(weeks.len() >= 8);
         assert_eq!(weeks.last().unwrap()["phase"], "Taper/Race");
     }
+
+    #[test]
+    fn guided_targets_expand_repeats_and_translate_intensity() {
+        let payload = crate::tools::guided_workout_payload(
+            &crate::parameters::CreateGuidedWorkout {
+                name: "Threshold repeats".into(),
+                overview: None,
+                steps: vec![crate::parameters::GuidedStep {
+                    kind: "training".into(),
+                    duration_seconds: Some(300),
+                    distance_meters: None,
+                    intensity: Some("threshold".into()),
+                    repeat: Some(4),
+                }],
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(payload["exercises"].as_array().unwrap().len(), 4);
+        assert_eq!(payload["exercises"][0]["intensityType"], 11);
+        assert_eq!(payload["exercises"][0]["intensityValue"], 7);
+    }
+
+    #[test]
+    fn adherence_identifies_unsatisfied_planned_days() {
+        let result = crate::tools::plan_adherence_summary(
+            20260810,
+            20260816,
+            &json!({"entities":[{"happenDay":20260810},{"happenDay":20260812}]}),
+            &[json!({"date":20260810})],
+        );
+        assert_eq!(result["missedPlannedDays"], json!([20260812]));
+        assert_eq!(result["adherence"], 0.5);
+    }
 }

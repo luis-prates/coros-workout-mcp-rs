@@ -727,6 +727,160 @@ impl CorosServer {
         })
         .await
     }
+    #[tool(
+        description = "Create a run workout from human-friendly steps such as 4 × 5 min threshold with 2 min easy recovery. Intensity accepts easy/aerobic/tempo/threshold/vo2, rpe:N, hr:LOW-HIGH, or pace:LOW-HIGH seconds/km."
+    )]
+    async fn create_guided_run_workout(
+        &self,
+        Parameters(p): Parameters<CreateGuidedWorkout>,
+    ) -> String {
+        result(async {
+            let payload = guided_workout_payload(&p, 1)?;
+            self.create_program(&self.auth().await?, payload).await?;
+            Ok(format!("Guided run workout \"{}\" created.", p.name))
+        })
+        .await
+    }
+    #[tool(
+        description = "Create a bike workout from human-friendly steps such as 3 × 10 min tempo. Intensity accepts easy/aerobic/tempo/threshold/vo2, rpe:N, hr:LOW-HIGH, or pace:LOW-HIGH seconds/km."
+    )]
+    async fn create_guided_bike_workout(
+        &self,
+        Parameters(p): Parameters<CreateGuidedWorkout>,
+    ) -> String {
+        result(async {
+            let payload = guided_workout_payload(&p, 2)?;
+            self.create_program(&self.auth().await?, payload).await?;
+            Ok(format!("Guided bike workout \"{}\" created.", p.name))
+        })
+        .await
+    }
+    #[tool(
+        description = "Move a scheduled workout to another date. dryRun defaults to true; a live move adds the destination first and requires confirm true."
+    )]
+    async fn reschedule_workout(&self, Parameters(p): Parameters<RescheduleWorkout>) -> String {
+        result(async {
+            iso(&p.from_date)?; iso(&p.to_date)?;
+            if p.from_date == p.to_date { return Err(anyhow!("fromDate and toDate must differ.")); }
+            let auth = self.auth().await?;
+            let source = self.get(&auth, "/training/schedule/query", &[("startDate", p.from_date.replace("-", "")), ("endDate", p.from_date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
+            let entry = source["entities"].as_array().and_then(|items| items.iter().find(|item| item["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).ok_or_else(|| anyhow!("No scheduled workout with that id exists on {}.", p.from_date))?;
+            let program = source["programs"].as_array().and_then(|items| items.iter().find(|item| item["idInPlan"].as_i64() == Some(p.scheduled_workout_id))).cloned().ok_or_else(|| anyhow!("COROS calendar response did not include the scheduled workout program."))?;
+            let destination = self.get(&auth, "/training/schedule/query", &[("startDate", p.to_date.replace("-", "")), ("endDate", p.to_date.replace("-", "")), ("supportRestExercise", "1".into())]).await?["data"].clone();
+            let new_id = destination["maxIdInPlan"].as_i64().unwrap_or_default() + 1;
+            let mut add_program = program; add_program["idInPlan"] = json!(new_id);
+            let add = json!({"entities":[{"happenDay":p.to_date.replace("-", ""),"idInPlan":new_id,"sortNoInSchedule":destination["entities"].as_array().map_or(0, Vec::len)}],"programs":[add_program],"versionObjects":[{"id":new_id,"status":1}],"pbVersion":2});
+            let mut removal = json!({"id":p.scheduled_workout_id,"status":3});
+            for key in ["planId","planProgramId","labelId"] { if !entry[key].is_null() { removal[key] = entry[key].clone(); } }
+            let remove = json!({"versionObjects":[removal],"pbVersion":2});
+            if p.dry_run.unwrap_or(true) { Ok(dry("/training/schedule/update", json!({"addFirst":add,"thenRemove":remove}))) }
+            else if !p.confirm.unwrap_or(false) { Err(anyhow!("Set confirm: true with dryRun: false to reschedule this workout.")) }
+            else { self.post(&auth, "/training/schedule/update", add).await?; if let Err(error) = self.post(&auth, "/training/schedule/update", remove).await { return Err(anyhow!("Destination was added but source removal failed: {error}")); } Ok("Scheduled workout rescheduled.".into()) }
+        }).await
+    }
+    #[tool(
+        description = "Delete a workout from the COROS library. dryRun defaults to true; a live deletion requires confirm true."
+    )]
+    async fn delete_workout(&self, Parameters(p): Parameters<DeleteWorkout>) -> String {
+        result(async {
+            let payload = json!([p.workout_id]);
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/program/delete", payload))
+            } else if !p.confirm.unwrap_or(false) {
+                Err(anyhow!(
+                    "Set confirm: true with dryRun: false to delete this workout."
+                ))
+            } else {
+                self.post(&self.auth().await?, "/training/program/delete", payload)
+                    .await?;
+                Ok("Workout deleted.".into())
+            }
+        })
+        .await
+    }
+    #[tool(
+        description = "Get a concise COROS performance dashboard with recovery, HRV, personal records, and race predictions."
+    )]
+    async fn get_performance_dashboard(&self) -> String {
+        result(async {
+            Ok(text(performance_dashboard(
+                &self.dashboard(&self.auth().await?).await?,
+            )))
+        })
+        .await
+    }
+    #[tool(
+        description = "Compare scheduled calendar sessions with completed activities and suggest a conservative next-week adjustment. This is read-only."
+    )]
+    async fn get_plan_adherence(&self, Parameters(p): Parameters<Adherence>) -> String {
+        result(async {
+            let start = iso(&p.start_date)?;
+            let end = iso(&p.end_date)?;
+            if start > end {
+                return Err(anyhow!("startDate must be on or before endDate."));
+            }
+            let auth = self.auth().await?;
+            let start_day = start.format("%Y%m%d").to_string().parse::<i64>()?;
+            let end_day = end.format("%Y%m%d").to_string().parse::<i64>()?;
+            let (_, activities) = self
+                .activities(&auth, 1, 50, Some(start_day), Some(end_day), None)
+                .await?;
+            let calendar = self
+                .get(
+                    &auth,
+                    "/training/schedule/query",
+                    &[
+                        ("startDate", start_day.to_string()),
+                        ("endDate", end_day.to_string()),
+                        ("supportRestExercise", "1".into()),
+                    ],
+                )
+                .await?["data"]
+                .clone();
+            Ok(text(plan_adherence_summary(
+                start_day,
+                end_day,
+                &calendar,
+                &activities,
+            )))
+        })
+        .await
+    }
+    #[tool(
+        description = "Record a local post-workout RPE journal entry (1-10) and optional notes. It never edits COROS activity records."
+    )]
+    async fn record_training_journal(&self, Parameters(p): Parameters<JournalEntry>) -> String {
+        result(async {
+            iso(&p.date)?;
+            if !(1..=10).contains(&p.rpe) {
+                return Err(anyhow!("rpe must be an integer from 1 to 10."));
+            }
+            let path = Self::auth_path()?.with_file_name("journal.json");
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut entries: Vec<Value> = fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+            entries.push(json!({"date":p.date,"rpe":p.rpe,"notes":p.notes,"labelId":p.label_id}));
+            fs::write(&path, serde_json::to_vec_pretty(&entries)?)?;
+            Ok("Training journal entry recorded locally.".into())
+        })
+        .await
+    }
+    #[tool(description = "List locally recorded post-workout RPE journal entries.")]
+    async fn list_training_journal(&self) -> String {
+        result(async {
+            let path = Self::auth_path()?.with_file_name("journal.json");
+            let entries: Value = fs::read_to_string(path)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_else(|| json!([]));
+            Ok(text(entries))
+        })
+        .await
+    }
 }
 
 pub(crate) fn endurance_workout_payload(
@@ -902,4 +1056,160 @@ pub(crate) fn race_plan_draft(plan: &RacePlan) -> anyhow::Result<Value> {
     Ok(
         json!({"eventName":plan.event_name,"startDate":start.to_string(),"goalDate":goal.to_string(),"daysPerWeek":days,"weeks":schedule,"reviewRequired":"This is a generic progression template, not medical or individualized coaching advice. Review volume, intensity, and recovery before creating workouts."}),
     )
+}
+
+pub(crate) fn guided_workout_payload(
+    workout: &CreateGuidedWorkout,
+    sport_type: i64,
+) -> anyhow::Result<Value> {
+    if workout.steps.is_empty() {
+        return Err(anyhow!("At least one step is required."));
+    }
+    let mut steps = Vec::new();
+    let mut intensities = Vec::new();
+    for (index, step) in workout.steps.iter().enumerate() {
+        let repeat = step.repeat.unwrap_or(1);
+        if !(1..=99).contains(&repeat) {
+            return Err(anyhow!(
+                "Step {} repeat must be between 1 and 99.",
+                index + 1
+            ));
+        }
+        for _ in 0..repeat {
+            steps.push(EnduranceStep {
+                kind: step.kind.clone(),
+                name: None,
+                duration_seconds: step.duration_seconds,
+                distance_meters: step.distance_meters,
+                intensity_type: None,
+                intensity_value: None,
+                intensity_value_extend: None,
+                intensity_display_unit: None,
+            });
+            intensities.push(step.intensity.clone());
+        }
+    }
+    let mut payload = endurance_workout_payload(
+        &CreateEnduranceWorkout {
+            name: workout.name.clone(),
+            overview: workout.overview.clone(),
+            steps,
+        },
+        sport_type,
+    )?;
+    for (exercise, intensity) in payload["exercises"]
+        .as_array_mut()
+        .unwrap_or(&mut Vec::new())
+        .iter_mut()
+        .zip(intensities)
+    {
+        if let Some(intensity) = intensity {
+            apply_guided_intensity(exercise, &intensity)?;
+        }
+    }
+    Ok(payload)
+}
+
+fn apply_guided_intensity(exercise: &mut Value, target: &str) -> anyhow::Result<()> {
+    let normalized = target.trim().to_ascii_lowercase();
+    let rpe = match normalized.as_str() {
+        "easy" => Some(3),
+        "aerobic" => Some(4),
+        "tempo" => Some(6),
+        "threshold" => Some(7),
+        "vo2" => Some(9),
+        _ => None,
+    };
+    if let Some(rpe) = rpe {
+        exercise["intensityType"] = json!(11);
+        exercise["intensityValue"] = json!(rpe);
+        return Ok(());
+    }
+    if let Some(value) = normalized.strip_prefix("rpe:") {
+        let rpe: i64 = value
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Use rpe:N where N is 1-10."))?;
+        if !(1..=10).contains(&rpe) {
+            return Err(anyhow!("RPE must be 1-10."));
+        }
+        exercise["intensityType"] = json!(11);
+        exercise["intensityValue"] = json!(rpe);
+        return Ok(());
+    }
+    let parse_range = |value: &str| -> anyhow::Result<(i64, i64)> {
+        let (low, high) = value
+            .split_once('-')
+            .ok_or_else(|| anyhow!("Use a LOW-HIGH range."))?;
+        let low = low.trim().parse()?;
+        let high = high.trim().parse()?;
+        if low <= 0 || high < low {
+            return Err(anyhow!("Intensity range must be positive and ascending."));
+        }
+        Ok((low, high))
+    };
+    if let Some(value) = normalized.strip_prefix("hr:") {
+        let (low, high) = parse_range(value)?;
+        exercise["intensityType"] = json!(2);
+        exercise["hrType"] = json!(2);
+        exercise["intensityValue"] = json!(low);
+        exercise["intensityValueExtend"] = json!(high);
+        return Ok(());
+    }
+    if let Some(value) = normalized.strip_prefix("pace:") {
+        let (low, high) = parse_range(value)?;
+        exercise["intensityType"] = json!(3);
+        exercise["intensityValue"] = json!(low * 1000);
+        exercise["intensityValueExtend"] = json!(high * 1000);
+        exercise["intensityDisplayUnit"] = json!(1);
+        exercise["intensityMultiplier"] = json!(1000);
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Unknown intensity \"{target}\". Use easy, aerobic, tempo, threshold, vo2, rpe:N, hr:LOW-HIGH, or pace:LOW-HIGH."
+    ))
+}
+
+fn performance_dashboard(raw: &Value) -> Value {
+    let summary = &raw["summaryInfo"];
+    json!({"recoveryPercent":summary["recoveryPct"],"recoveryState":summary["recoveryState"],"fullRecoveryHours":summary["fullRecoveryHours"],"restingHr":summary["rhr"],"sleepHrv":summary["sleepHrvData"],"racePredictor":summary["racePredictor"],"personalRecords":summary["recordDetailList"]})
+}
+
+pub(crate) fn plan_adherence_summary(
+    start_day: i64,
+    end_day: i64,
+    calendar: &Value,
+    activities: &[Value],
+) -> Value {
+    let planned: Vec<_> = calendar["entities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["happenDay"].as_i64())
+        .collect();
+    let completed: Vec<_> = activities
+        .iter()
+        .filter_map(|activity| activity["date"].as_i64())
+        .collect();
+    let missed: Vec<_> = planned
+        .iter()
+        .filter(|day| !completed.contains(day))
+        .copied()
+        .collect();
+    let adherence = if planned.is_empty() {
+        None
+    } else {
+        Some((planned.len() - missed.len()) as f64 / planned.len() as f64)
+    };
+    let suggestion = match adherence {
+        Some(value) if value < 0.5 => {
+            "Reduce next week to essential sessions and restore consistency."
+        }
+        Some(value) if value < 0.8 => {
+            "Keep volume steady; reschedule only the highest-priority missed session."
+        }
+        Some(_) => "Adherence is strong; progress conservatively if recovery is normal.",
+        None => "No scheduled workouts in this range; create a plan before measuring adherence.",
+    };
+    json!({"range":{"startDay":start_day,"endDay":end_day},"plannedDays":planned,"completedDays":completed,"missedPlannedDays":missed,"adherence":adherence,"suggestedNextWeekAdjustment":suggestion})
 }
