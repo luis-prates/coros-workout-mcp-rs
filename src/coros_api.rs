@@ -57,6 +57,52 @@ pub(crate) fn activity_file_type_code(file_type: &str) -> Result<i64> {
         _ => Err(anyhow!("fileType must be one of: csv, gpx, kml, tcx, fit.")),
     }
 }
+/// Stable sport identifiers supported by COROS devices. The Training Hub
+/// endpoint that lists these is optional and intermittently returns a service
+/// exception, so callers can still select a sport when it is unavailable.
+pub(crate) fn known_sport_types() -> Value {
+    json!([
+        {"sportType": 98, "sportName": "Custom Sport"},
+        {"sportType": 100, "sportName": "Run"},
+        {"sportType": 101, "sportName": "Indoor Run"},
+        {"sportType": 102, "sportName": "Trail Run"},
+        {"sportType": 103, "sportName": "Track Run"},
+        {"sportType": 104, "sportName": "Hike"},
+        {"sportType": 105, "sportName": "Mountain Climb"},
+        {"sportType": 106, "sportName": "Climb"},
+        {"sportType": 200, "sportName": "Bike"},
+        {"sportType": 201, "sportName": "Indoor Bike"},
+        {"sportType": 202, "sportName": "Road E-Bike"},
+        {"sportType": 203, "sportName": "Gravel Road Bike"},
+        {"sportType": 204, "sportName": "Mountain Bike"},
+        {"sportType": 205, "sportName": "Mountain E-Bike"},
+        {"sportType": 299, "sportName": "Helmet Bike"},
+        {"sportType": 300, "sportName": "Pool Swim"},
+        {"sportType": 301, "sportName": "Open Water Swim"},
+        {"sportType": 400, "sportName": "Gym Cardio"},
+        {"sportType": 401, "sportName": "GPS Cardio"},
+        {"sportType": 402, "sportName": "Strength"},
+        {"sportType": 500, "sportName": "Ski"},
+        {"sportType": 501, "sportName": "Snowboard"},
+        {"sportType": 502, "sportName": "Cross-country Ski"},
+        {"sportType": 503, "sportName": "Ski Touring"},
+        {"sportType": 700, "sportName": "Rowing"},
+        {"sportType": 701, "sportName": "Indoor Rowing"},
+        {"sportType": 702, "sportName": "Whitewater"},
+        {"sportType": 704, "sportName": "Flatwater"},
+        {"sportType": 705, "sportName": "Windsurfing"},
+        {"sportType": 706, "sportName": "Speedsurfing"},
+        {"sportType": 800, "sportName": "Indoor Climb"},
+        {"sportType": 801, "sportName": "Bouldering"},
+        {"sportType": 900, "sportName": "Walk"},
+        {"sportType": 901, "sportName": "Jump Rope"},
+        {"sportType": 902, "sportName": "Climb Stairs"},
+        {"sportType": 10000, "sportName": "Triathlon"},
+        {"sportType": 10001, "sportName": "Multi Sport"},
+        {"sportType": 10002, "sportName": "Ski Touring"},
+        {"sportType": 10003, "sportName": "Multi-Pitch Climb"}
+    ])
+}
 
 impl CorosServer {
     pub(crate) fn catalog_path() -> PathBuf {
@@ -323,34 +369,35 @@ impl CorosServer {
         label_id: &str,
         sport_type: i64,
     ) -> Result<Value> {
-        use reqwest::header::{CONTENT_TYPE, HeaderValue};
-
         let sport_type = sport_type.to_string();
-        let mut headers = Self::headers(auth);
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
+        let user_id = auth
+            .user_id
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| auth.user_id.to_string());
         let response = self
             .client
             .post(format!(
                 "{}/activity/detail/query",
                 Self::base_url(&auth.region)?
             ))
-            .headers(headers)
+            .headers(Self::headers(auth))
             .query(&[
-                ("screenW", "565"),
-                ("screenH", "982"),
+                ("screenW", "1920"),
+                ("screenH", "1080"),
                 ("labelId", label_id),
                 ("sportType", &sport_type),
+                ("userId", &user_id),
             ])
-            .body("")
+            .json(&json!({}))
             .send()
             .await?;
-        let data = response
-            .json::<Value>()
-            .await
-            .context("COROS returned a non-JSON response")?;
+        let status = response.status();
+        let body = response.text().await?;
+        let data: Value = serde_json::from_str(&body).map_err(|_| {
+            let preview: String = body.chars().take(240).collect();
+            anyhow!("COROS activity detail returned HTTP {status} with a non-JSON body: {preview}")
+        })?;
         if data["result"] != "0000" {
             return Err(anyhow!(
                 "COROS API error (/activity/detail/query): {}",
@@ -401,7 +448,7 @@ impl CorosServer {
             .ok_or_else(|| anyhow!("COROS did not return an activity download URL."))
     }
     pub(crate) async fn private_profile(&self, auth: &AuthData) -> Result<Value> {
-        Ok(self.post(auth, "/profile/private/query", json!({})).await?["data"].clone())
+        Ok(self.get(auth, "/account/query", &[]).await?["data"].clone())
     }
     pub(crate) async fn daily_metrics(
         &self,
@@ -426,10 +473,13 @@ impl CorosServer {
         }))
     }
     pub(crate) async fn sport_types(&self, auth: &AuthData) -> Result<Value> {
-        Ok(self
+        match self
             .get(auth, "/activity/fit/getImportSportList", &[])
-            .await?["data"]
-            .clone())
+            .await
+        {
+            Ok(response) if !response["data"].is_null() => Ok(response["data"].clone()),
+            Ok(_) | Err(_) => Ok(known_sport_types()),
+        }
     }
     pub(crate) async fn dashboard(&self, auth: &AuthData) -> Result<Value> {
         Ok(self.get(auth, "/dashboard/query", &[]).await?["data"].clone())

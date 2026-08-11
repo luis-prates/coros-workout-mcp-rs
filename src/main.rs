@@ -54,6 +54,20 @@ mod tests {
     }
 
     #[test]
+    fn sport_type_fallback_contains_common_sports() {
+        let sports = crate::coros_api::known_sport_types();
+        assert_eq!(sports[1]["sportType"], 100);
+        assert_eq!(sports[1]["sportName"], "Run");
+        assert!(
+            sports
+                .as_array()
+                .expect("fallback is an array")
+                .iter()
+                .any(|sport| sport["sportType"] == 402)
+        );
+    }
+
+    #[test]
     fn date_validation_and_monday_anchor_work() {
         let date = iso("2026-08-17").expect("valid ISO date");
         assert_eq!(monday(date), date);

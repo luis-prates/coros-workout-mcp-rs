@@ -15,7 +15,10 @@ pub(crate) struct CorosServer {
 impl CorosServer {
     pub(crate) fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .gzip(true)
+                .build()
+                .expect("the built-in reqwest client configuration is valid"),
             tool_router: Self::tool_router(),
         }
     }
@@ -392,7 +395,9 @@ impl CorosServer {
         })
         .await
     }
-    #[tool(description = "List COROS sport type IDs and their current names from the service.")]
+    #[tool(
+        description = "List COROS sport type IDs and names. Uses a built-in COROS mapping if the optional service endpoint is unavailable."
+    )]
     async fn get_sport_types(&self) -> String {
         result(async { Ok(text(self.sport_types(&self.auth().await?).await?)) }).await
     }
