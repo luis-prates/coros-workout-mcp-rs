@@ -79,4 +79,30 @@ mod tests {
             "  1. Bench Press — 2×8 (16 reps total) @ 60kg"
         );
     }
+
+    #[test]
+    fn activity_query_uses_documented_filters() {
+        let params = crate::coros_api::activity_query_params(
+            2,
+            50,
+            Some(20260801),
+            Some(20260811),
+            Some(&[100, 402]),
+        );
+        assert!(params.contains(&("startDay", "20260801".into())));
+        assert!(params.contains(&("endDay", "20260811".into())));
+        assert!(params.contains(&("modeList", "100,402".into())));
+        assert!(
+            !params
+                .iter()
+                .any(|(name, _)| *name == "startDate" || *name == "endDate")
+        );
+    }
+
+    #[test]
+    fn activity_exports_accept_documented_formats() {
+        assert_eq!(crate::coros_api::activity_file_type_code("GPX").unwrap(), 1);
+        assert_eq!(crate::coros_api::activity_file_type_code("fit").unwrap(), 4);
+        assert!(crate::coros_api::activity_file_type_code("zip").is_err());
+    }
 }

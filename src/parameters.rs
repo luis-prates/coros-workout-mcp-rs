@@ -112,9 +112,23 @@ pub(crate) struct Custom {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ListActivities {
     pub(crate) start_date: Option<i64>,
+    pub(crate) sport_types: Option<Vec<i64>>,
     pub(crate) end_date: Option<i64>,
     pub(crate) limit: Option<i64>,
     pub(crate) page_number: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportActivityFile {
+    pub(crate) label_id: String,
+    pub(crate) sport_type: i64,
+    pub(crate) file_type: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DailyMetrics {
+    pub(crate) start_date: i64,
+    pub(crate) end_date: i64,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

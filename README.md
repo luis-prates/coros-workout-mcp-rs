@@ -6,7 +6,7 @@ Unofficial Rust implementation of the COROS strength-workout MCP server. It uses
 
 ## Included tools
 
-`authenticate_coros`, `check_coros_auth`, `search_exercises`, `create_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `list_training_calendar`, `schedule_workout`, `remove_scheduled_workout`, `list_custom_exercises`, and `create_custom_exercise`.
+`authenticate_coros`, `check_coros_auth`, `get_profile`, `get_daily_metrics`, `get_sport_types`, `search_exercises`, `create_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `export_activity_file`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `list_training_calendar`, `schedule_workout`, `remove_scheduled_workout`, `list_custom_exercises`, and `create_custom_exercise`.
 
 Calendar, plan, and custom-exercise write tools default to `dryRun: true`. A live calendar deletion additionally requires `confirm: true`.
 

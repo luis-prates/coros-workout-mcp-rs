@@ -212,7 +212,7 @@ impl CorosServer {
         result(async { let rows=self.workouts(&self.auth().await?,p.name.as_deref().unwrap_or(""),p.sport_type.unwrap_or(0),p.limit.unwrap_or(10).clamp(1,50)).await?;Ok(if rows.is_empty(){"No workouts found.".into()}else{text(json!(rows.iter().map(|w|json!({"id":w["id"],"name":w["name"],"overview":w["overview"],"sportType":w["sportType"],"duration":w["duration"],"totalSets":w["totalSets"],"exerciseNum":w["exerciseNum"]})).collect::<Vec<_>>()))}) }).await
     }
     #[tool(
-        description = "List completed activities recorded by a COROS watch, such as runs, swims, and strength sessions. startDate/endDate are YYYYMMDD integers."
+        description = "List completed activities recorded by a COROS watch. startDate/endDate are YYYYMMDD integers; sportTypes optionally filters by COROS sport type IDs."
     )]
     async fn list_activities(&self, Parameters(p): Parameters<ListActivities>) -> String {
         result(async {
@@ -225,6 +225,7 @@ impl CorosServer {
                 p.limit.unwrap_or(20).clamp(1, 50),
                 p.start_date,
                 p.end_date,
+                p.sport_types.as_deref(),
             ).await?;
             if activities.is_empty() { return Ok("No activities found.".into()); }
             let formatted = activities.iter().map(|activity| {
@@ -276,6 +277,46 @@ impl CorosServer {
                 summary["totalReps"].as_i64().unwrap_or_default(),
             ))
         }).await
+    }
+    #[tool(description = "List COROS sport type IDs and their current names from the service.")]
+    async fn get_sport_types(&self) -> String {
+        result(async { Ok(text(self.sport_types(&self.auth().await?).await?)) }).await
+    }
+    #[tool(
+        description = "Get the COROS private profile, including available training-zone settings."
+    )]
+    async fn get_profile(&self) -> String {
+        result(async { Ok(text(self.private_profile(&self.auth().await?).await?)) }).await
+    }
+    #[tool(
+        description = "Get daily COROS training metrics for an inclusive YYYYMMDD date range, including HRV, resting HR, training load, and recent EvoLab analysis."
+    )]
+    async fn get_daily_metrics(&self, Parameters(p): Parameters<DailyMetrics>) -> String {
+        result(async {
+            if p.start_date > p.end_date {
+                return Err(anyhow!("startDate must be on or before endDate."));
+            }
+            Ok(text(
+                self.daily_metrics(&self.auth().await?, p.start_date, p.end_date)
+                    .await?,
+            ))
+        })
+        .await
+    }
+    #[tool(
+        description = "Get a temporary COROS download URL for a completed activity. fileType must be csv, gpx, kml, tcx, or fit."
+    )]
+    async fn export_activity_file(&self, Parameters(p): Parameters<ExportActivityFile>) -> String {
+        result(async {
+            let url = self
+                .activity_file_url(&self.auth().await?, &p.label_id, p.sport_type, &p.file_type)
+                .await?;
+            Ok(format!(
+                "Temporary {} download URL:\n{url}",
+                p.file_type.to_ascii_uppercase()
+            ))
+        })
+        .await
     }
     #[tool(description = "List COROS Training Hub plan-library records.")]
     async fn list_training_plans(&self, Parameters(p): Parameters<Status>) -> String {

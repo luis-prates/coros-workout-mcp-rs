@@ -18,6 +18,46 @@ pub(crate) struct AuthData {
     pub(crate) timestamp: i64,
 }
 
+pub(crate) fn activity_query_params(
+    page_number: i64,
+    size: i64,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    sport_types: Option<&[i64]>,
+) -> Vec<(&'static str, String)> {
+    let mut params = vec![
+        ("pageNumber", page_number.to_string()),
+        ("size", size.to_string()),
+    ];
+    if let Some(date) = start_date {
+        params.push(("startDay", date.to_string()));
+    }
+    if let Some(date) = end_date {
+        params.push(("endDay", date.to_string()));
+    }
+    if let Some(sport_types) = sport_types {
+        params.push((
+            "modeList",
+            sport_types
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        ));
+    }
+    params
+}
+pub(crate) fn activity_file_type_code(file_type: &str) -> Result<i64> {
+    match file_type.to_ascii_lowercase().as_str() {
+        "csv" => Ok(0),
+        "gpx" => Ok(1),
+        "kml" => Ok(2),
+        "tcx" => Ok(3),
+        "fit" => Ok(4),
+        _ => Err(anyhow!("fileType must be one of: csv, gpx, kml, tcx, fit.")),
+    }
+}
+
 impl CorosServer {
     pub(crate) fn catalog_path() -> PathBuf {
         env::var_os("COROS_CATALOG_PATH")
@@ -221,7 +261,9 @@ impl CorosServer {
             .workouts(auth, name, 0, 50)
             .await?
             .into_iter()
-            .filter(|w| w["name"].as_str().unwrap_or("").trim().to_lowercase() == expected)
+            .filter(|workout| {
+                workout["name"].as_str().unwrap_or("").trim().to_lowercase() == expected
+            })
             .collect();
         if matches.len() != 1 {
             return Err(anyhow!(if matches.is_empty() {
@@ -233,7 +275,7 @@ impl CorosServer {
         matches[0]["id"]
             .as_str()
             .map(str::to_owned)
-            .or_else(|| matches[0]["id"].as_i64().map(|v| v.to_string()))
+            .or_else(|| matches[0]["id"].as_i64().map(|value| value.to_string()))
             .ok_or_else(|| anyhow!("The workout did not include a stable ID."))
     }
     pub(crate) async fn activities(
@@ -243,18 +285,9 @@ impl CorosServer {
         size: i64,
         start_date: Option<i64>,
         end_date: Option<i64>,
+        sport_types: Option<&[i64]>,
     ) -> Result<(i64, Vec<Value>)> {
-        // COROS ignores date filters server-side, so also filter this page locally.
-        let mut params = vec![
-            ("pageNumber", page_number.to_string()),
-            ("size", size.to_string()),
-        ];
-        if let Some(date) = start_date {
-            params.push(("startDate", date.to_string()));
-        }
-        if let Some(date) = end_date {
-            params.push(("endDate", date.to_string()));
-        }
+        let params = activity_query_params(page_number, size, start_date, end_date, sport_types);
         let data = self.get(auth, "/activity/query", &params).await?["data"].clone();
         let count = data["count"].as_i64().unwrap_or_default();
         let activities = data["dataList"]
@@ -264,8 +297,10 @@ impl CorosServer {
             .into_iter()
             .filter(|activity| {
                 let date = activity["date"].as_i64().unwrap_or_default();
+                let sport_type = activity["sportType"].as_i64().unwrap_or_default();
                 start_date.is_none_or(|start| date >= start)
                     && end_date.is_none_or(|end| date <= end)
+                    && sport_types.is_none_or(|types| types.contains(&sport_type))
             })
             .collect();
         Ok((count, activities))
@@ -277,6 +312,7 @@ impl CorosServer {
         sport_type: i64,
     ) -> Result<Value> {
         use reqwest::header::{CONTENT_TYPE, HeaderValue};
+
         let sport_type = sport_type.to_string();
         let mut headers = Self::headers(auth);
         headers.insert(
@@ -312,6 +348,76 @@ impl CorosServer {
             ));
         }
         Ok(data["data"].clone())
+    }
+    pub(crate) async fn activity_file_url(
+        &self,
+        auth: &AuthData,
+        label_id: &str,
+        sport_type: i64,
+        file_type: &str,
+    ) -> Result<String> {
+        let sport_type = sport_type.to_string();
+        let file_type = activity_file_type_code(file_type)?.to_string();
+        let response = self
+            .client
+            .post(format!(
+                "{}/activity/detail/download",
+                Self::base_url(&auth.region)?
+            ))
+            .headers(Self::headers(auth))
+            .query(&[
+                ("labelId", label_id),
+                ("sportType", &sport_type),
+                ("fileType", &file_type),
+            ])
+            .json(&json!({}))
+            .send()
+            .await?;
+        let data = response
+            .json::<Value>()
+            .await
+            .context("COROS returned a non-JSON response")?;
+        if data["result"] != "0000" {
+            return Err(anyhow!(
+                "COROS API error (/activity/detail/download): {}",
+                data["message"].as_str().unwrap_or("unknown")
+            ));
+        }
+        data["data"]["fileUrl"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("COROS did not return an activity download URL."))
+    }
+    pub(crate) async fn private_profile(&self, auth: &AuthData) -> Result<Value> {
+        Ok(self.post(auth, "/profile/private/query", json!({})).await?["data"].clone())
+    }
+    pub(crate) async fn daily_metrics(
+        &self,
+        auth: &AuthData,
+        start_day: i64,
+        end_day: i64,
+    ) -> Result<Value> {
+        let detail = self
+            .get(
+                auth,
+                "/analyse/dayDetail/query",
+                &[
+                    ("startDay", start_day.to_string()),
+                    ("endDay", end_day.to_string()),
+                ],
+            )
+            .await?;
+        let analysis = self.get(auth, "/analyse/query", &[]).await?;
+        Ok(json!({
+            "dayList": detail["data"]["dayList"],
+            "recentAnalysis": analysis["data"]["t7dayList"],
+        }))
+    }
+    pub(crate) async fn sport_types(&self, auth: &AuthData) -> Result<Value> {
+        Ok(self
+            .get(auth, "/activity/fit/getImportSportList", &[])
+            .await?["data"]
+            .clone())
     }
 }
 trait Pipe: Sized {
