@@ -175,4 +175,43 @@ mod tests {
         assert_eq!(overview["laps"][0]["lapDistance"], 1000);
         assert_eq!(overview["heartRateZones"][0]["zone"], 3);
     }
+
+    #[test]
+    fn multisport_draft_requires_multiple_legs() {
+        let session = crate::parameters::MultisportSession {
+            name: "Brick".into(),
+            notes: None,
+            legs: vec![
+                crate::parameters::MultisportLeg {
+                    sport: "Bike".into(),
+                    duration_seconds: Some(3600),
+                    distance_meters: None,
+                    notes: None,
+                },
+                crate::parameters::MultisportLeg {
+                    sport: "Run".into(),
+                    duration_seconds: None,
+                    distance_meters: Some(5000.0),
+                    notes: Some("off the bike".into()),
+                },
+            ],
+        };
+        let draft = crate::tools::multisport_session_draft(&session).unwrap();
+        assert_eq!(draft["legs"].as_array().unwrap().len(), 2);
+        assert!(draft["nextSteps"].as_str().unwrap().contains("COROS"));
+    }
+
+    #[test]
+    fn race_plan_is_phased_and_has_goal_week() {
+        let draft = crate::tools::race_plan_draft(&crate::parameters::RacePlan {
+            event_name: "Autumn 10K".into(),
+            start_date: Some("2026-08-17".into()),
+            goal_date: "2026-10-12".into(),
+            days_per_week: Some(4),
+        })
+        .unwrap();
+        let weeks = draft["weeks"].as_array().unwrap();
+        assert!(weeks.len() >= 8);
+        assert_eq!(weeks.last().unwrap()["phase"], "Taper/Race");
+    }
 }

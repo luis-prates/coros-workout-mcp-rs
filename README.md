@@ -6,9 +6,8 @@ Unofficial Rust implementation of the COROS strength-workout MCP server. It uses
 
 ## Included tools
 
-`authenticate_coros`, `check_coros_auth`, `get_profile`, `get_daily_metrics`, `get_sport_types`, `search_exercises`, `create_workout`, `create_run_workout`, `create_bike_workout`, `update_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `export_activity_file`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `list_training_calendar`, `schedule_workout`, `replace_scheduled_workout`, `remove_scheduled_workout`, `list_custom_exercises`, and `create_custom_exercise`.
-`update_workout`, calendar, plan, and custom-exercise write tools default to `dryRun: true`. A live calendar removal or replacement additionally requires `confirm: true`; workout updates create a new workout rather than modifying the original.
-
+`authenticate_coros`, `check_coros_auth`, `get_profile`, `get_training_dashboard`, `get_daily_metrics`, `get_weekly_training_status`, `get_sport_types`, `search_exercises`, `create_workout`, `create_run_workout`, `create_bike_workout`, `update_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `compare_activities`, `export_activity_file`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `clone_training_plan`, `delete_training_plan`, `generate_race_plan`, `build_multisport_session`, `list_training_calendar`, `schedule_workout`, `replace_scheduled_workout`, `remove_scheduled_workout`, `preview_calendar_event`, `list_custom_exercises`, and `create_custom_exercise`.
+`update_workout`, plan cloning/deletion, calendar, and custom-exercise write tools default to `dryRun: true`. Live plan/calendar removal or replacement requires `confirm: true`. `preview_calendar_event` and `build_multisport_session` intentionally return safe drafts because COROS has no verified public write contract for calendar events/labels or unified multi-sport structured workouts.
 
 ## Build
 

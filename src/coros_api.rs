@@ -431,6 +431,9 @@ impl CorosServer {
             .await?["data"]
             .clone())
     }
+    pub(crate) async fn dashboard(&self, auth: &AuthData) -> Result<Value> {
+        Ok(self.get(auth, "/dashboard/query", &[]).await?["data"].clone())
+    }
 }
 trait Pipe: Sized {
     fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {

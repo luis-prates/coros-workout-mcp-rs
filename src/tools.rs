@@ -587,6 +587,146 @@ impl CorosServer {
     async fn create_custom_exercise(&self, Parameters(p): Parameters<Custom>) -> String {
         result(async{let parts=[("Whole Body",0),("Chest",2),("Back",3),("Shoulders",4),("Legs/Hips",5),("Arms",6),("Core",7)];let muscles=[("Deltoids",1),("Chest",2),("Latissimus Dorsi",3),("Triceps",4),("Abs",5),("Lower Back",6),("Glutes",7),("Quadriceps",8),("Obliques",9),("Trapezius",10),("Forearms",11),("Biceps",12),("Calves",13),("Posterior Thigh",14),("Hip Flexors",15)];let equipment=[("Bodyweight",1),("Dumbbells",2),("Barbells",3),("Bands",4),("Bosu Ball",5),("Gym Equipment",6),("Exercise Ball",7),("Foam Roller",8),("Medicine Ball",9),("Bench",10),("Kettlebell",11)];let part=code(&parts,&p.body_part).ok_or_else(||anyhow!("Unknown bodyPart \"{}\".",p.body_part))?;let muscle=p.primary_muscle.as_deref().map(|s|code(&muscles,s).ok_or_else(||anyhow!("Unknown primaryMuscle \"{s}\"."))).transpose()?;if part!=0&&muscle.is_none(){return Err(anyhow!("primaryMuscle is required unless bodyPart is Whole Body."));}let eq=p.equipment.as_deref().map(|s|code(&equipment,s).ok_or_else(||anyhow!("Unknown equipment \"{s}\"."))).transpose()?;let payload=json!({"access":1,"sportType":4,"exerciseType":2,"name":p.name,"overview":p.description.unwrap_or_default(),"part":[part],"muscle":muscle.map(|x|vec![x]).unwrap_or_default(),"muscleRelevance":[],"equipment":eq.map(|x|vec![x]).unwrap_or_default(),"intensityCustom":0,"intensityMultiplier":0,"intensityType":1,"intensityValue":0,"intensityValueExtend":0,"restType":1,"restValue":30,"targetType":3,"targetValue":15});if p.dry_run.unwrap_or(true){Ok(dry("/training/exercise/add",payload))}else{self.post(&self.auth().await?,"/training/exercise/add",payload).await?;Ok("Custom Strength exercise created.".into())}}).await
     }
+    #[tool(
+        description = "Get COROS dashboard data: recovery, HRV, race predictions, and personal records."
+    )]
+    async fn get_training_dashboard(&self) -> String {
+        result(async { Ok(text(self.dashboard(&self.auth().await?).await?)) }).await
+    }
+    #[tool(
+        description = "Summarize the trailing seven days of activities, daily metrics, calendar commitments, and dashboard recovery. endDate defaults to today (UTC)."
+    )]
+    async fn get_weekly_training_status(
+        &self,
+        Parameters(p): Parameters<WeeklyTrainingStatus>,
+    ) -> String {
+        result(async {
+            let end = p.end_date.as_deref().map(iso).transpose()?.unwrap_or_else(|| chrono::Utc::now().date_naive());
+            let start = end - chrono::Duration::days(6);
+            let start_day = start.format("%Y%m%d").to_string().parse::<i64>()?;
+            let end_day = end.format("%Y%m%d").to_string().parse::<i64>()?;
+            let auth = self.auth().await?;
+            let (_, activities) = self.activities(&auth, 1, 50, Some(start_day), Some(end_day), None).await?;
+            let metrics = self.daily_metrics(&auth, start_day, end_day).await?;
+            let calendar = self.get(&auth, "/training/schedule/query", &[("startDate", start_day.to_string()), ("endDate", end_day.to_string()), ("supportRestExercise", "1".into())]).await?["data"].clone();
+            let dashboard = self.dashboard(&auth).await?;
+            let duration = activities.iter().map(|a| a["totalTime"].as_i64().unwrap_or_default()).sum::<i64>();
+            let distance = activities.iter().map(|a| a["distance"].as_f64().unwrap_or_default()).sum::<f64>();
+            let load = activities.iter().map(|a| a["trainingLoad"].as_i64().unwrap_or_default()).sum::<i64>();
+            Ok(text(json!({"range":{"startDate":start.to_string(),"endDate":end.to_string()},"completed":{"activities":activities.len(),"durationSeconds":duration,"distanceMeters":distance,"trainingLoad":load},"dailyMetrics":metrics,"scheduled":calendar["entities"],"dashboard":dashboard})))
+        }).await
+    }
+    #[tool(
+        description = "Compare two completed activities by duration, distance, training load, heart rate, and available lap data."
+    )]
+    async fn compare_activities(&self, Parameters(p): Parameters<CompareActivities>) -> String {
+        result(async {
+            let auth = self.auth().await?;
+            let left = self
+                .activity_detail(&auth, &p.left_label_id, p.left_sport_type)
+                .await?;
+            let right = self
+                .activity_detail(&auth, &p.right_label_id, p.right_sport_type)
+                .await?;
+            Ok(text(compare_activity_details(
+                &p.left_label_id,
+                &left,
+                &p.right_label_id,
+                &right,
+            )))
+        })
+        .await
+    }
+    #[tool(
+        description = "Preview a calendar label or event (race, test, rest, travel). Live event writes are deliberately unavailable until COROS publishes or a request capture verifies their undocumented contract."
+    )]
+    async fn preview_calendar_event(
+        &self,
+        Parameters(p): Parameters<CalendarEventPreview>,
+    ) -> String {
+        result(async {
+            iso(&p.date)?;
+            Ok(dry(
+                "unverified-calendar-event",
+                json!({"date":p.date,"kind":p.kind,"title":p.title,"notes":p.notes}),
+            ))
+        })
+        .await
+    }
+    #[tool(
+        description = "Build a multi-activity session draft for triathlon, duathlon, brick, or run-plus-strength training. It does not pretend to create an unsupported unified COROS multisport workout."
+    )]
+    async fn build_multisport_session(
+        &self,
+        Parameters(p): Parameters<MultisportSession>,
+    ) -> String {
+        result(async { Ok(text(multisport_session_draft(&p)?)) }).await
+    }
+    #[tool(
+        description = "Generate a dry-run, phased race-plan draft from start date to goal date. Review it, then create individual workouts/plans with the write tools."
+    )]
+    async fn generate_race_plan(&self, Parameters(p): Parameters<RacePlan>) -> String {
+        result(async { Ok(dry("race-plan-draft", race_plan_draft(&p)?)) }).await
+    }
+    #[tool(
+        description = "Clone a COROS training plan under a new name. dryRun defaults to true; the original plan is never modified."
+    )]
+    async fn clone_training_plan(&self, Parameters(p): Parameters<ClonePlan>) -> String {
+        result(async {
+            let auth = self.auth().await?;
+            let mut plan = self
+                .get(
+                    &auth,
+                    "/training/plan/detail",
+                    &[
+                        ("id", p.plan_id.clone()),
+                        ("supportRestExercise", "1".into()),
+                    ],
+                )
+                .await?["data"]
+                .clone();
+            if plan.is_null() {
+                return Err(anyhow!(
+                    "COROS returned no training plan detail for {}.",
+                    p.plan_id
+                ));
+            }
+            for key in ["id", "userId", "authorId"] {
+                plan[key] = json!("0");
+            }
+            for key in ["createTimestamp", "version"] {
+                plan[key] = json!(0);
+            }
+            plan["name"] = json!(p.name);
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/plan/add", plan))
+            } else {
+                self.post(&auth, "/training/plan/add", plan).await?;
+                Ok("Training plan cloned.".into())
+            }
+        })
+        .await
+    }
+    #[tool(
+        description = "Delete a training plan. dryRun defaults to true; a live deletion requires confirm true."
+    )]
+    async fn delete_training_plan(&self, Parameters(p): Parameters<DeletePlan>) -> String {
+        result(async {
+            let payload = json!([p.plan_id]);
+            if p.dry_run.unwrap_or(true) {
+                Ok(dry("/training/plan/delete", payload))
+            } else if !p.confirm.unwrap_or(false) {
+                Err(anyhow!(
+                    "Set confirm: true with dryRun: false to delete this training plan."
+                ))
+            } else {
+                self.post(&self.auth().await?, "/training/plan/delete", payload)
+                    .await?;
+                Ok("Training plan deleted.".into())
+            }
+        })
+        .await
+    }
 }
 
 pub(crate) fn endurance_workout_payload(
@@ -679,4 +819,87 @@ pub(crate) fn clone_workout_payload(
     }
     workout["sourceUrl"] = json!(DEFAULT_SOURCE_URL);
     Ok(workout)
+}
+
+fn compare_activity_details(left_id: &str, left: &Value, right_id: &str, right: &Value) -> Value {
+    let metric = |detail: &Value, key: &str| {
+        detail["summary"][key]
+            .as_f64()
+            .or_else(|| detail["summary"][key].as_i64().map(|value| value as f64))
+            .unwrap_or_default()
+    };
+    let summary = |id: &str, detail: &Value| {
+        json!({
+            "labelId": id,
+            "duration": metric(detail, "totalTime"),
+            "distance": metric(detail, "distance"),
+            "trainingLoad": metric(detail, "trainingLoad"),
+            "avgHr": metric(detail, "avgHr"),
+            "calories": metric(detail, "calories"),
+            "lapCount": detail["lapList"].as_array().map_or(0, Vec::len),
+        })
+    };
+    let left_summary = summary(left_id, left);
+    let right_summary = summary(right_id, right);
+    json!({
+        "left": left_summary,
+        "right": right_summary,
+        "rightMinusLeft": {
+            "duration": metric(right, "totalTime") - metric(left, "totalTime"),
+            "distance": metric(right, "distance") - metric(left, "distance"),
+            "trainingLoad": metric(right, "trainingLoad") - metric(left, "trainingLoad"),
+            "avgHr": metric(right, "avgHr") - metric(left, "avgHr"),
+        },
+        "leftLaps": left["lapList"],
+        "rightLaps": right["lapList"],
+    })
+}
+
+pub(crate) fn multisport_session_draft(session: &MultisportSession) -> anyhow::Result<Value> {
+    if session.legs.len() < 2 {
+        return Err(anyhow!("A multisport session needs at least two legs."));
+    }
+    let legs = session.legs.iter().enumerate().map(|(index, leg)| {
+        if leg.sport.trim().is_empty() { return Err(anyhow!("Leg {} needs a sport name.", index + 1)); }
+        if leg.duration_seconds.is_some_and(|value| value <= 0) || leg.distance_meters.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err(anyhow!("Leg {} durationSeconds/distanceMeters must be positive.", index + 1));
+        }
+        if leg.duration_seconds.is_none() && leg.distance_meters.is_none() && !leg.sport.eq_ignore_ascii_case("transition") {
+            return Err(anyhow!("Leg {} needs durationSeconds or distanceMeters.", index + 1));
+        }
+        Ok(json!({"order":index + 1,"sport":leg.sport,"durationSeconds":leg.duration_seconds,"distanceMeters":leg.distance_meters,"notes":leg.notes}))
+    }).collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(
+        json!({"name":session.name,"notes":session.notes,"legs":legs,"nextSteps":"Create each supported run/bike/strength leg with its dedicated COROS tool, then schedule them in sequence. COROS has no verified unified multisport structured-workout write contract."}),
+    )
+}
+
+pub(crate) fn race_plan_draft(plan: &RacePlan) -> anyhow::Result<Value> {
+    let goal = iso(&plan.goal_date)?;
+    let start = plan
+        .start_date
+        .as_deref()
+        .map(iso)
+        .transpose()?
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    if goal <= start {
+        return Err(anyhow!("goalDate must be after startDate."));
+    }
+    let days = plan.days_per_week.unwrap_or(4).clamp(2, 7) as usize;
+    let weeks = ((goal - start).num_days() + 6) / 7;
+    let schedule = (0..weeks).map(|week| {
+        let fraction = (week + 1) as f64 / weeks.max(1) as f64;
+        let phase = if fraction < 0.45 { "Base" } else if fraction < 0.75 { "Build" } else if fraction < 0.9 { "Peak" } else { "Taper/Race" };
+        let sessions = (0..days).map(|day| match day {
+            0 => "easy aerobic",
+            1 => "quality intervals or tempo",
+            2 if days >= 4 => "recovery or strength",
+            x if x + 1 == days => "long endurance",
+            _ => "easy aerobic",
+        }).collect::<Vec<_>>();
+        json!({"week":week + 1,"starts":(start + chrono::Duration::days(week * 7)).to_string(),"phase":phase,"sessions":sessions})
+    }).collect::<Vec<_>>();
+    Ok(
+        json!({"eventName":plan.event_name,"startDate":start.to_string(),"goalDate":goal.to_string(),"daysPerWeek":days,"weeks":schedule,"reviewRequired":"This is a generic progression template, not medical or individualized coaching advice. Review volume, intensity, and recovery before creating workouts."}),
+    )
 }

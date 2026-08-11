@@ -190,3 +190,66 @@ pub(crate) struct ActivityDetail {
     pub(crate) label_id: String,
     pub(crate) sport_type: Option<i64>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WeeklyTrainingStatus {
+    /// Week ending on this ISO date; defaults to today in UTC.
+    pub(crate) end_date: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CompareActivities {
+    pub(crate) left_label_id: String,
+    pub(crate) left_sport_type: i64,
+    pub(crate) right_label_id: String,
+    pub(crate) right_sport_type: i64,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CalendarEventPreview {
+    pub(crate) date: String,
+    /// race, test, rest, travel, or a custom label.
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    pub(crate) notes: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MultisportLeg {
+    /// For example run, bike, transition, or strength.
+    pub(crate) sport: String,
+    pub(crate) duration_seconds: Option<i64>,
+    pub(crate) distance_meters: Option<f64>,
+    pub(crate) notes: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MultisportSession {
+    pub(crate) name: String,
+    pub(crate) legs: Vec<MultisportLeg>,
+    pub(crate) notes: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RacePlan {
+    pub(crate) event_name: String,
+    pub(crate) goal_date: String,
+    pub(crate) start_date: Option<String>,
+    /// 2 through 7; defaults to 4.
+    pub(crate) days_per_week: Option<i64>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClonePlan {
+    pub(crate) plan_id: String,
+    pub(crate) name: String,
+    pub(crate) dry_run: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeletePlan {
+    pub(crate) plan_id: String,
+    pub(crate) confirm: Option<bool>,
+    pub(crate) dry_run: Option<bool>,
+}
