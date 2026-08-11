@@ -6,9 +6,9 @@ Unofficial Rust implementation of the COROS strength-workout MCP server. It uses
 
 ## Included tools
 
-`authenticate_coros`, `check_coros_auth`, `get_profile`, `get_daily_metrics`, `get_sport_types`, `search_exercises`, `create_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `export_activity_file`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `list_training_calendar`, `schedule_workout`, `remove_scheduled_workout`, `list_custom_exercises`, and `create_custom_exercise`.
+`authenticate_coros`, `check_coros_auth`, `get_profile`, `get_daily_metrics`, `get_sport_types`, `search_exercises`, `create_workout`, `create_run_workout`, `create_bike_workout`, `update_workout`, `update_exercises`, `list_workouts`, `list_activities`, `get_activity_detail`, `export_activity_file`, `list_training_plans`, `get_training_plan`, `create_training_plan`, `list_training_calendar`, `schedule_workout`, `replace_scheduled_workout`, `remove_scheduled_workout`, `list_custom_exercises`, and `create_custom_exercise`.
+`update_workout`, calendar, plan, and custom-exercise write tools default to `dryRun: true`. A live calendar removal or replacement additionally requires `confirm: true`; workout updates create a new workout rather than modifying the original.
 
-Calendar, plan, and custom-exercise write tools default to `dryRun: true`. A live calendar deletion additionally requires `confirm: true`.
 
 ## Build
 
